@@ -1,10 +1,12 @@
 import math
-import bikesim.engine.route as route_module
-import bikesim.engine.rider as rider_module
-import bikesim.engine.wind as wind_module
+from engine.route import Route as route_module
+from engine.rider import Rider as rider_module
+import engine.wind as wind_module
 import matplotlib.pyplot as plt
 
-def resistive_force(rider: rider_module.Rider, slope: float, apparent_wind_speed: float) -> float:
+MAX_CORNERING_VELOCITY = 100.0  #High improbable realistic number to avoid inf errors
+
+def resistive_force(rider: rider_module, slope: float, apparent_wind_speed: float) -> float:
     #Sum of gravity, drag resistance and rolling resistance forces
 
     gravity_force = rider.mass * 9.81 * math.sin(math.atan(slope / 100))  # Convert slope percentage to radians
@@ -23,7 +25,7 @@ def _to_local_xy(origin, point):
     y = math.radians(point[0] - origin[0]) * earth_radius
     return x, y
 
-def curvature_radius_at(route: route_module.Route, distance_m: float):
+def curvature_radius_at(route: route_module, distance_m: float):
     i, j = route._bracketing_indexes(distance_m)
 
     point_a = route.points[i] if i >= 0 else route.points[0]
@@ -31,9 +33,9 @@ def curvature_radius_at(route: route_module.Route, distance_m: float):
     point_c = route.points[j + 1] if j + 1 < len(route.points) else route.points[-1]
 
     #Calculate the curvature radius using the three points
-    a = route_module.Route.haversine_distance(point_b, point_c)
-    b = route_module.Route.haversine_distance(point_a, point_c)
-    c = route_module.Route.haversine_distance(point_a, point_b)
+    a = route_module.haversine_distance(point_b, point_c)
+    b = route_module.haversine_distance(point_a, point_c)
+    c = route_module.haversine_distance(point_a, point_b)
 
     xa, ya = 0.0, 0.0  # origin
     xb, yb = _to_local_xy(point_a, point_b)
@@ -49,9 +51,12 @@ def curvature_radius_at(route: route_module.Route, distance_m: float):
     return radius
 
 
-def max_cornering_velocity(route: route_module.Route, distance_m: float, slope: float) -> float:
+def max_cornering_velocity(route: route_module, distance_m: float, slope: float) -> float:
     #Calculate the maximum cornering velocity
     radius = curvature_radius_at(route, distance_m)
+
+    if radius == float('inf'):
+        return float(MAX_CORNERING_VELOCITY)
 
     friction_coefficient = 0.7  # Typical value for dry asphalt
 
@@ -59,13 +64,13 @@ def max_cornering_velocity(route: route_module.Route, distance_m: float, slope: 
     return v_max
 
 
-def drive_force(rider: rider_module.Rider, velocity: float, p_target: float, epsilon=1e-3) -> float:
+def drive_force(rider: rider_module, velocity: float, p_target: float, epsilon=1e-3) -> float:
     #calculate the drive force based on the target power and current velocity
     
     return min(rider.f_max, p_target / max(epsilon, velocity))  # Ensure the drive force does not exceed the maximum force
 
 
-def step(rider: rider_module.Rider, route: route_module.Route, position: float, velocity: float, slope: float, apparent_wind_speed: float, p_target: float, dt: float):
+def step(rider: rider_module, route: route_module, position: float, velocity: float, slope: float, apparent_wind_speed: float, p_target: float, dt: float):
     #Calculate the new velocity and position after a time step dt
 
     resistive = resistive_force(rider, slope, apparent_wind_speed)
@@ -87,7 +92,7 @@ def step(rider: rider_module.Rider, route: route_module.Route, position: float, 
 
 
 
-def simulate(rider: rider_module.Rider, route: route_module.Route, wind_velocity_vector: tuple[float, float], p_target: float, dt: float) -> tuple[list[dict], float]:
+def simulate(rider: rider_module, route: route_module, wind_velocity_vector: tuple[float, float], p_target: float, dt: float) -> tuple[list[dict], float]:
     #Simulate the ride along the route with given wind conditions and target power
     results = []
     position = 0.0
@@ -135,22 +140,22 @@ def slope_position_graph(results: tuple[list[dict], float]):
     plt.savefig("slope_chart_results.png")
 
 
-if __name__ == "__main__":
-    # Example usage
-    rider = rider_module.Rider(rider_mass=70, bike_mass=10, ftp=250, f_max=1000, cda=0.3, crr=0.005, inertia=1.0, wheel_radius=0.35, metabolic_efficiency=0.22)
-    route = route_module.Route.get_route_from_gpx("../data/encinitas.gpx")  # Load a route from a GPX file
-    #route = route_module.Route.get_route_from_gpx("../data/tour-de-friends.gpx")  # Load a route from a GPX file
-    wind_velocity_vector = (5.0, 0.0)  # Wind blowing from the west at 5 m/s
-    p_target = 200.0  # Target power in watts
-    dt = 0.1  # Time step in seconds
+# if __name__ == "__main__":
+#     # Example usage
+#     rider = rider_module(rider_mass=70, bike_mass=10, ftp=250, f_max=1000, cda=0.3, crr=0.005, inertia=1.0, wheel_radius=0.35, metabolic_efficiency=0.22)
+#     route = route_module.get_route_from_gpx("../data/encinitas.gpx")  # Load a route from a GPX file
+#     #route = route_module.get_route_from_gpx("../data/tour-de-friends.gpx")  # Load a route from a GPX file
+#     wind_velocity_vector = (5.0, 0.0)  # Wind blowing from the west at 5 m/s
+#     p_target = 200.0  # Target power in watts
+#     dt = 0.1  # Time step in seconds
 
-    results = simulate(rider, route, wind_velocity_vector, p_target, dt)
+#     results = simulate(rider, route, wind_velocity_vector, p_target, dt)
 
-    with open("simulation_results.txt", "w") as f:
-        for position, velocity, slope, apparent_wind_speed, yaw_angle, max_velocity, p_realized, ele1, ele2, cum_dist1, cum_dist2 in results[0]:
-            f.write(f"Position: {position:.2f} m, Velocity: {velocity:.2f} m/s, Slope: {slope:.2f} %, Apparent Wind Speed: {apparent_wind_speed:.2f} m/s, Yaw Angle: {yaw_angle:.2f} degrees, Max Speed: {max_velocity:.2f} m/s, Realized Power: {p_realized:.2f} W, Elevation 1: {ele1:.2f} m, Elevation 2: {ele2:.2f} m, Cumulative Distance 1: {cum_dist1:.2f} m, Cumulative Distance 2: {cum_dist2:.2f} m\n")
-        f.write(f"Total kcal burned: {results[1]:.2f} kcal\n")
+#     with open("simulation_results.txt", "w") as f:
+#         for position, velocity, slope, apparent_wind_speed, yaw_angle, max_velocity, p_realized, ele1, ele2, cum_dist1, cum_dist2 in results[0]:
+#             f.write(f"Position: {position:.2f} m, Velocity: {velocity:.2f} m/s, Slope: {slope:.2f} %, Apparent Wind Speed: {apparent_wind_speed:.2f} m/s, Yaw Angle: {yaw_angle:.2f} degrees, Max Speed: {max_velocity:.2f} m/s, Realized Power: {p_realized:.2f} W, Elevation 1: {ele1:.2f} m, Elevation 2: {ele2:.2f} m, Cumulative Distance 1: {cum_dist1:.2f} m, Cumulative Distance 2: {cum_dist2:.2f} m\n")
+#         f.write(f"Total kcal burned: {results[1]:.2f} kcal\n")
 
-    velocity_position_graph(results)
-    slope_position_graph(results)
-    route.get_route_profile()  # Display the route profile
+#     velocity_position_graph(results)
+#     slope_position_graph(results)
+#     route.get_route_profile()  # Display the route profile
