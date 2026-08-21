@@ -1,7 +1,7 @@
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from db import supabase
 
@@ -12,7 +12,7 @@ GPX_BUCKET = "gpx_files"
 
 @router.post("")
 async def upload_route(
-    name: str,
+    name: str = Form(...),
     file: UploadFile = File(...),
 ):
     if not file.filename:
@@ -74,3 +74,24 @@ async def upload_route(
             status_code=500,
             detail=f"Route upload failed: {exc}",
         ) from exc
+
+@router.get('/{route_name}')
+async def get_route(route_name: str):
+    response = supabase.table('routes').select('*').eq('name', route_name).execute()
+    if not response.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Route not found",
+        )
+    return response.data[0]
+
+@router.delete('/{route_name}')
+async def delete_route(route_name: str):
+    response = supabase.table('routes').select('*').eq('name', route_name).execute()
+    if not response.data:
+        raise HTTPException(
+            status_code=404,
+            detail='Route not found',
+        )
+
+    return response.data[0]
