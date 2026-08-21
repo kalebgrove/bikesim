@@ -3,11 +3,21 @@ from engine.route import Route as route_module
 from engine.rider import Rider as rider_module
 from engine.physics import simulate
 
+from routes.riders import router as riders_router
+from routes.routes import router as routes_router
+
 app = FastAPI()
+
+app.include_router(riders_router)
+app.include_router(routes_router)
 
 @app.get('/')
 async def root():
     return {"message": "root location"}
+
+@app.get('/health')
+async def health():
+    return {"status": "ok"}
 
 @app.get('/simulate')
 async def simulate_route():
@@ -21,27 +31,3 @@ async def simulate_route():
     results, kcal_burned = simulate(rider, route, wind_velocity_vector, p_target, dt)
 
     return {"results": results, "kcal_burned": kcal_burned}
-
-@app.post('/rider')
-async def create_rider(rider_mass, bike_mass, ftp, f_max, cda, crr, inertia, wheel_radius, metabolic_efficiency):
-    # Rider should be stored in a database of sorts.
-    return {"message": "Rider created successfully", "rider": {
-        "rider_mass": rider_mass,
-        "bike_mass": bike_mass,
-        "ftp": ftp,
-        "f_max": f_max,
-        "cda": cda,
-        "crr": crr,
-        "inertia": inertia,
-        "wheel_radius": wheel_radius,
-        "metabolic_efficiency": metabolic_efficiency
-    }}
-
-@app.post('/route')
-async def upload_route(gpx_file: str):
-    # Route should be stored in a database of sorts.
-    route = route_module.get_route_from_gpx(gpx_file)
-    return {"message": "Route uploaded successfully", "route": {
-        "total_distance": route.total_distance(),
-        "points": route.points
-    }}
