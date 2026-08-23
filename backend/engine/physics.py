@@ -2,19 +2,22 @@ import math
 from engine.route import Route as route_module
 from engine.rider import Rider as rider_module
 import engine.wind as wind_module
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 MAX_CORNERING_VELOCITY = 100.0  #High improbable realistic number to avoid inf errors
 
-def resistive_force(rider: rider_module, slope: float, apparent_wind_speed: float) -> float:
+def resistive_components(rider: rider_module, slope: float, apparent_wind_speed: float, air_density: float) -> tuple[float, float, float]:
+    theta = math.atan(slope / 100)
+
+    gravity_force = rider.mass * 9.81 * math.sin(theta)
+    rolling_resistance_force = rider.mass * 9.81 * rider.crr * math.cos(theta)
+    drag_force = 0.5 * rider.cda * air_density * apparent_wind_speed ** 2
+
+    return gravity_force, rolling_resistance_force, drag_force
+
+def resistive_force(rider: rider_module, slope: float, apparent_wind_speed: float, air_density: float) -> float:
     #Sum of gravity, drag resistance and rolling resistance forces
-
-    gravity_force = rider.mass * 9.81 * math.sin(math.atan(slope / 100))  # Convert slope percentage to radians
-
-    drag_force = 0.5 * rider.cda * 1.225 * apparent_wind_speed ** 2  # Air density at sea level is approximately 1.225 kg/m³
-
-    rolling_resistance_force = rider.mass * 9.81 * rider.crr * math.cos(math.atan(slope / 100))  # Convert slope percentage to radians
-
+    gravity_force, rolling_resistance_force, drag_force = resistive_components(rider, slope, apparent_wind_speed, air_density)
     return gravity_force + drag_force + rolling_resistance_force
 
 def _to_local_xy(origin, point):
@@ -70,10 +73,10 @@ def drive_force(rider: rider_module, velocity: float, p_target: float, epsilon=1
     return min(rider.f_max, p_target / max(epsilon, velocity))  # Ensure the drive force does not exceed the maximum force
 
 
-def step(rider: rider_module, route: route_module, position: float, velocity: float, slope: float, apparent_wind_speed: float, p_target: float, dt: float):
+def step(rider: rider_module, route: route_module, position: float, velocity: float, slope: float, apparent_wind_speed: float, p_target: float, dt: float, air_density: float) -> tuple[float, float, float, float]:
     #Calculate the new velocity and position after a time step dt
 
-    resistive = resistive_force(rider, slope, apparent_wind_speed)
+    resistive = resistive_force(rider, slope, apparent_wind_speed, air_density)
     drive = drive_force(rider, velocity, p_target)
 
     net_force = drive - resistive
@@ -81,10 +84,9 @@ def step(rider: rider_module, route: route_module, position: float, velocity: fl
 
     max_velocity = max_cornering_velocity(route, position, slope)
 
-    old_velocity = velocity
     velocity = min(velocity + acceleration * dt, max_velocity)  # Update velocity, but don't exceed the maximum cornering velocity
 
-    p_realized = drive * old_velocity  # Calculate the realized power based on the drive force and current velocity
+    p_realized = drive * velocity  # Calculate the realized power based on the drive force and current velocity
 
     position += velocity * dt  # Update position
 
@@ -92,7 +94,7 @@ def step(rider: rider_module, route: route_module, position: float, velocity: fl
 
 
 
-def simulate(rider: rider_module, route: route_module, wind_velocity_vector: tuple[float, float], p_target: float, dt: float) -> tuple[list[dict], float]:
+def simulate(rider: rider_module, route: route_module, wind_velocity_vector: tuple[float, float], p_target: float, dt: float, air_density: float) -> tuple[list[dict], float]:
     #Simulate the ride along the route with given wind conditions and target power
     results = []
     position = 0.0
@@ -100,7 +102,10 @@ def simulate(rider: rider_module, route: route_module, wind_velocity_vector: tup
     total_distance = route.total_distance()
     mechanical_joules = 0.0
 
-    while position < total_distance:
+    max_time = 3600 * 3  # 3 hours
+    time_elapsed = 0.0
+
+    while position < total_distance and time_elapsed < max_time:
         slope, ele1, ele2, cum_dist1, cum_dist2 = route.slope_at(position) if position is not None else (0.0, 0.0, 0.0, 0.0, 0.0)
 
         heading = route.heading_at(position) if position is not None else 0.0
@@ -110,13 +115,15 @@ def simulate(rider: rider_module, route: route_module, wind_velocity_vector: tup
 
         apparent_wind_speed, yaw_angle = wind_module.apparent_wind(bike_velocity_vector, wind_velocity_vector)
 
-        position, velocity, max_velocity, p_realized = step(rider, route, position, velocity, slope, apparent_wind_speed, p_target, dt)
+        position, velocity, max_velocity, p_realized = step(rider, route, position, velocity, slope, apparent_wind_speed, p_target, dt, air_density)
 
         mechanical_joules += p_realized * dt  # Accumulate mechanical energy
 
-        print(f"Position: {position:.2f} m, Velocity: {velocity:.2f} m/s, Slope: {slope:.2f} %, Apparent Wind Speed: {apparent_wind_speed:.2f} m/s, Yaw Angle: {yaw_angle:.2f} degrees, Max Speed: {max_velocity:.2f} m/s")
+        # print(f"Position: {position:.2f} m, Velocity: {velocity:.2f} m/s, Slope: {slope:.2f} %, Apparent Wind Speed: {apparent_wind_speed:.2f} m/s, Yaw Angle: {yaw_angle:.2f} degrees, Max Speed: {max_velocity:.2f} m/s")
 
         results.append((position, velocity, slope, apparent_wind_speed, yaw_angle, max_velocity, p_realized, ele1, ele2, cum_dist1, cum_dist2))  # Store position and velocity
+
+        time_elapsed += dt
 
     metabolic_joules = mechanical_joules / rider.metabolic_efficiency  # Calculate total metabolic energy based on efficiency
     kcal_burned = metabolic_joules / 4184  # Convert joules to kilocalories
@@ -124,20 +131,20 @@ def simulate(rider: rider_module, route: route_module, wind_velocity_vector: tup
     return results, kcal_burned
 
 
-def velocity_position_graph(results: tuple[list[dict], float]):
-    plt.plot([r[0] for r in results[0]], [r[1] for r in results[0]])
-    plt.xlabel("Position (m)")
-    plt.ylabel("Velocity (m/s)")
-    plt.title("Simulation Results")
-    plt.savefig("velocity_chart_results.png")
+# def velocity_position_graph(results: tuple[list[dict], float]):
+#     plt.plot([r[0] for r in results[0]], [r[1] for r in results[0]])
+#     plt.xlabel("Position (m)")
+#     plt.ylabel("Velocity (m/s)")
+#     plt.title("Simulation Results")
+#     plt.savefig("velocity_chart_results.png")
 
 
-def slope_position_graph(results: tuple[list[dict], float]):
-    plt.plot([r[0] for r in results[0]], [r[2] for r in results[0]])
-    plt.xlabel("Position (m)")
-    plt.ylabel("Slope (%)")
-    plt.title("Slope vs Position")
-    plt.savefig("slope_chart_results.png")
+# def slope_position_graph(results: tuple[list[dict], float]):
+#     plt.plot([r[0] for r in results[0]], [r[2] for r in results[0]])
+#     plt.xlabel("Position (m)")
+#     plt.ylabel("Slope (%)")
+#     plt.title("Slope vs Position")
+#     plt.savefig("slope_chart_results.png")
 
 
 # if __name__ == "__main__":

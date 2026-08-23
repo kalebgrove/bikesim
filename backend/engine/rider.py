@@ -10,13 +10,13 @@ class Rider:
         self.wheel_radius = wheel_radius
         self.metabolic_efficiency = metabolic_efficiency
 
-    def test_rider(self):
-        self.name = input("Enter rider name: ")
-        self.mass = float(input("Enter rider mass (kg): ")) + float(input("Enter bike mass (kg): "))
-        self.ftp = float(input("Enter FTP (W): "))
-        self.f_max = float(input("Enter maximum force (N): "))
-        self.cda = float(input("Enter drag area (m²): "))
-        self.crr = float(input("Enter rolling resistance coefficient: "))
-        self.inertia = float(input("Enter inertia (kg·m²): "))
-        self.wheel_radius = float(input("Enter wheel radius (m): "))
-        self.metabolic_efficiency = float(input("Enter metabolic efficiency: "))
+    # def test_rider(self):
+    #     self.name = input("Enter rider name: ")
+    #     self.mass = float(input("Enter rider mass (kg): ")) + float(input("Enter bike mass (kg): "))
+    #     self.ftp = float(input("Enter FTP (W): "))
+    #     self.f_max = float(input("Enter maximum force (N): "))
+    #     self.cda = float(input("Enter drag area (m²): "))
+    #     self.crr = float(input("Enter rolling resistance coefficient: "))
+    #     self.inertia = float(input("Enter inertia (kg·m²): "))
+    #     self.wheel_radius = float(input("Enter wheel radius (m): "))
+    #     self.metabolic_efficiency = float(input("Enter metabolic efficiency: "))

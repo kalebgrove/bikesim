@@ -1,0 +1,10 @@
+{
+  "description": "Configure and analyze cycling race simulations by uploading GPX routes, setting rider parameters, and monitoring live telemetry for optimized performance.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

@@ -3,30 +3,35 @@
 import xml.etree.ElementTree as ET
 import math
 import matplotlib.pyplot as plt
+from bisect import bisect_right
 
 class Route:
     @classmethod
 
     def get_route_from_gpx(cls, filepath):
         #Read a gpx and extract route information (lat and lon for example)
-        with open(filepath, 'r') as gpx_file:
-            gpx_data = gpx_file.read()
+        tree = ET.parse(filepath)
+        return cls._from_root(tree.getroot())
 
-            tree = ET.parse(filepath)
-            root = tree.getroot()
+    @classmethod
+    def get_route_from_bytes(cls, data: bytes):
+        #Parse GPX content already loaded (e.g. downloaded from Supabase Storage)
+        return cls._from_root(ET.fromstring(data))
 
-            #Find all points from the route and elevation data
-            points = []
-            ns = {'gpx': root.tag.split('}')[0].strip('{')} if '}' in root.tag else {}
+    @classmethod
+    def _from_root(cls, root):
+        #Find all points from the route and elevation data
+        points = []
+        ns = {'gpx': root.tag.split('}')[0].strip('{')} if '}' in root.tag else {}
 
-            for trkpt in root.iter(f"{{{ns['gpx']}}}trkpt" if ns else "trkpt"):
-                lat = float(trkpt.get('lat'))
-                lon = float(trkpt.get('lon'))
-                ele_elem = trkpt.find(f"{{{ns['gpx']}}}ele" if ns else "ele")
-                ele = float(ele_elem.text) if ele_elem is not None else None
-                points.append((lat, lon, ele))
+        for trkpt in root.iter(f"{{{ns['gpx']}}}trkpt" if ns else "trkpt"):
+            lat = float(trkpt.get('lat'))
+            lon = float(trkpt.get('lon'))
+            ele_elem = trkpt.find(f"{{{ns['gpx']}}}ele" if ns else "ele")
+            ele = float(ele_elem.text) if ele_elem is not None else 0.0
+            points.append((lat, lon, ele))
 
-            return cls(points)
+        return cls(points)
 
     @staticmethod
     def haversine_distance(position1, position2) -> float:
@@ -48,17 +53,20 @@ class Route:
 
 
     def _bracketing_indexes(self, distance_m):
-        if distance_m < 0:
+        points = self._cumulative
+
+        if len(points) < 2:
+            return 0, 0
+        
+        if distance_m < points[0]:
             return 0, 1
 
-        if distance_m >= self._cumulative[-1]:
+        if distance_m >= points[-1]:
             return len(self.points) - 2, len(self.points) - 1
 
-        for i in range(len(self._cumulative) - 1):
-            if self._cumulative[i] <= distance_m < self._cumulative[i + 1]:
-                return i, i + 1
+        j = bisect_right(points, distance_m)
 
-        return 0, 1
+        return j - 1, j
 
 
     def slope_at(self, distance_m):
@@ -72,7 +80,39 @@ class Route:
     def total_distance(self) -> float:
         #Calculate the total distance of the route
         return self._cumulative[-1] if self._cumulative else 0.0
-    
+
+
+    def elevation_stats(self) -> tuple[float, float]:
+        #Return (elevation_gain, elevation_loss) in meters based on smoothed elevations
+        gain = 0.0
+        loss = 0.0
+        for i in range(1, len(self.points)):
+            delta = self.points[i][2] - self.points[i - 1][2]
+            if delta > 0:
+                gain += delta
+            else:
+                loss -= delta
+        return gain, loss
+
+    def geometry(self) -> list[dict]:
+        #Route points shaped like the frontend RoutePoint: distance in km, grade in %
+        out = []
+        n = len(self.points)
+        for i, (lat, lon, ele) in enumerate(self.points):
+            if i < n - 1:
+                run = self._cumulative[i + 1] - self._cumulative[i]
+                grade = ((self.points[i + 1][2] - ele) / run * 100) if run > 1e-9 else 0.0
+            else:
+                grade = out[-1]["grade"] if out else 0.0
+            out.append({
+                "distance": round(self._cumulative[i] / 1000, 6),
+                "elevation": round(ele, 2),
+                "lat": lat,
+                "lon": lon,
+                "grade": round(grade, 3),
+            })
+        return out
+
 
     def __init__(self, points):
         self.points = points

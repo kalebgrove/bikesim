@@ -1,15 +1,28 @@
+import os
+
 from fastapi import FastAPI
-from engine.route import Route as route_module
-from engine.rider import Rider as rider_module
-from engine.physics import simulate
+from fastapi.middleware.cors import CORSMiddleware
 
 from routes.riders import router as riders_router
 from routes.routes import router as routes_router
+from routes.simulations import router as simulations_router
 
 app = FastAPI()
 
+DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:8443,http://127.0.0.1:5173,http://127.0.0.1:8443"
+origins = [origin.strip() for origin in os.getenv("FRONTEND_ORIGINS", DEFAULT_ORIGINS).split(",") if origin.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(riders_router)
 app.include_router(routes_router)
+app.include_router(simulations_router)
 
 @app.get('/')
 async def root():
@@ -18,16 +31,3 @@ async def root():
 @app.get('/health')
 async def health():
     return {"status": "ok"}
-
-@app.get('/simulate')
-async def simulate_route():
-    # Create a sample route and rider for simulation
-    route = route_module.get_route_from_gpx("./data/encinitas.gpx")
-    rider = rider_module(rider_mass=70, bike_mass=10, ftp=250, f_max=1000, cda=0.3, crr=0.005, inertia=1.0, wheel_radius=0.35, metabolic_efficiency=0.22)
-    wind_velocity_vector = (0.0, 0.0)  # No wind for this example
-    p_target = 250.0  # Target power in watts
-    dt = 1.0  # Time step in seconds
-
-    results, kcal_burned = simulate(rider, route, wind_velocity_vector, p_target, dt)
-
-    return {"results": results, "kcal_burned": kcal_burned}
