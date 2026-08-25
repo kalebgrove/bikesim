@@ -6,9 +6,9 @@ A cycling simulation platform that models real-time bike physics using a backend
 
 ```
 ┌─────────────┐     WebSocket      ┌──────────────┐     SQL/REST     ┌────────────┐
-│   Frontend   │ ◄────────────────► │   Backend    │ ◄──────────────► │  Supabase  │
-│  React/Vite  │     REST API       │   FastAPI    │                  │  Postgres  │
-│  Recharts    │                    │   Physics    │                  │  Storage   │
+│  Frontend   │ ◄────────────────► │   Backend    │ ◄──────────────► │  Supabase  │
+│  React/Vite │     REST API       │   FastAPI    │                  │  Postgres  │
+│  Recharts   │                    │   Physics    │                  │  Storage   │
 └─────────────┘                    └──────────────┘                  └────────────┘
 ```
 
