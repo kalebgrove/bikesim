@@ -48,10 +48,8 @@ Create a `.env` file in the project root:
 ```env
 SUPABASE_URL
 SUPABASE_KEY
-FRONTEND_ORIGINS
+BACKEND_URL
 ```
-
-> **Never commit `.env` to version control.** The service role key has full database access.
 
 ### 3. Database migration
 
