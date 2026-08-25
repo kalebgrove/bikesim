@@ -29,7 +29,7 @@ A cycling simulation platform that models real-time bike physics using a backend
 ### 1. Clone and install
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/kalebgrove/bikesim
 cd bikesim
 
 # Backend
@@ -46,9 +46,9 @@ cd ..
 Create a `.env` file in the project root:
 
 ```env
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your-service-role-key
-FRONTEND_ORIGINS=http://localhost:5173,http://localhost:8443
+SUPABASE_URL
+SUPABASE_KEY
+FRONTEND_ORIGINS
 ```
 
 > **Never commit `.env` to version control.** The service role key has full database access.
