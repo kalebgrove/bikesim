@@ -1,7 +1,7 @@
 import type { Route, SimConfig, SimulationCreated } from "./types";
 
 const API_BASE: string =
-  (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
+  (import.meta.env.BACKEND_URL as string | undefined) ?? "";
 
 export interface RouteRow {
   id: number | string;
