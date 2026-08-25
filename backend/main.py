@@ -1,9 +1,10 @@
+import base64
 import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from routes.riders import router as riders_router
@@ -22,6 +23,60 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+SITE_PASSWORD = os.getenv("SITE_PASSWORD", "")
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html><head><title>BikeSim</title>
+<style>
+  body{display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;
+       background:#0f172a;font-family:system-ui,sans-serif;color:#e2e8f0}
+  form{background:#1e293b;padding:2rem;border-radius:12px;box-shadow:0 4px 24px #0005}
+  h2{margin:0 0 1rem;text-align:center}
+  input{width:100%;padding:.6rem;margin-bottom:1rem;border:1px solid #334155;border-radius:6px;
+        background:#0f172a;color:#e2e8f0;font-size:1rem;box-sizing:border-box}
+  button{width:100%;padding:.6rem;background:#3b82f6;color:#fff;border:none;border-radius:6px;
+         font-size:1rem;cursor:pointer}
+  button:hover{background:#2563eb}
+</style></head>
+<body>
+<form method="POST">
+  <h2>BikeSim</h2>
+  <input type="password" name="password" placeholder="Password" autofocus>
+  <button type="submit">Enter</button>
+</form></body></html>"""
+
+
+@app.middleware("http")
+async def basic_auth(request: Request, call_next):
+    if not SITE_PASSWORD:
+        return await call_next(request)
+
+    if request.url.path.startswith("/health"):
+        return await call_next(request)
+
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(auth[6:]).decode()
+            _, password = decoded.split(":", 1)
+            if password == SITE_PASSWORD:
+                return await call_next(request)
+        except Exception:
+            pass
+
+    if request.method == "POST" and request.url.path == "/":
+        form = await request.form()
+        if form.get("password") == SITE_PASSWORD:
+            from starlette.responses import RedirectResponse
+            response = RedirectResponse("/", status_code=302)
+            response.set_cookie("auth", SITE_PASSWORD, httponly=True, max_age=86400 * 30, samesite="lax")
+            return response
+
+    if request.cookies.get("auth") == SITE_PASSWORD:
+        return await call_next(request)
+
+    return HTMLResponse(LOGIN_HTML, status_code=401, headers={"WWW-Authenticate": 'Basic realm="BikeSim"'})
 
 app.include_router(riders_router)
 app.include_router(routes_router)
