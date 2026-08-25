@@ -173,7 +173,7 @@ export default function Results() {
                 labelFormatter={(v) => fmtTime(Number(v))}
               />
               <Legend wrapperStyle={{ fontSize: 10, fontFamily: "JetBrains Mono", color: "#526278" }} />
-              <Area yAxisId="elev" type="monotone" dataKey="elev" fill="#38bdf808" stroke="#38bdf820" strokeWidth={1} dot={false} name="Elevation (m)" />
+              <Area yAxisId="elev" type="monotone" dataKey="elev" fill="#ffffff10" stroke="#ffffff40" strokeWidth={1.5} dot={false} name="Elevation (m)" />
               <Line yAxisId="power" type="monotone" dataKey="target" stroke="#38bdf844" strokeWidth={1} dot={false} name="Target (W)" strokeDasharray="4 2" />
               <Line yAxisId="power" type="monotone" dataKey="realized" stroke="#38bdf8" strokeWidth={1.5} dot={false} name="Realized (W)" />
             </ComposedChart>

@@ -3,6 +3,9 @@ import type { Simulation, SimConfig, TelemetryPoint, WsServerMessage, WsStatus }
 import { getSimulation, upsertSimulation } from "../lib/store";
 import { createSimulation, simulationStreamUrl } from "../lib/api";
 
+let lastRenderTime = 0;
+const HIDDEN_THROTTLE_MS = 500;
+
 export function useSimEngine() {
   const [wsStatus, setWsStatus] = useState<WsStatus>("disconnected");
   const socketRef = useRef<WebSocket | null>(null);
@@ -50,6 +53,13 @@ export function useSimEngine() {
       }
       case "tick": {
         const point = msg.data as TelemetryPoint;
+        // When the tab is hidden, throttle store updates to avoid a backlog
+        // that lags the UI on return. Status/summary/stopped always go through.
+        if (document.hidden) {
+          const now = Date.now();
+          if (now - lastRenderTime < HIDDEN_THROTTLE_MS) return;
+          lastRenderTime = now;
+        }
         // A tick whose clock went backwards means the backend session was restarted
         const history =
           sim.latest && point.t <= sim.latest.t ? [point] : [...sim.history, point];

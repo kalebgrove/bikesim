@@ -10,8 +10,10 @@ from schemas import (
     SimulationCreated,
     SimulationState,
     SimCreateRequest,
+    SimSummary,
 )
 from sim_manager import manager, rider_from_config
+from persistence import delete_persisted, load_persisted, persist_session
 
 router = APIRouter(prefix="/simulations", tags=["Simulations"])
 
@@ -83,24 +85,38 @@ async def create_simulation(req: SimCreateRequest):
 @router.get("/{sim_id}")
 async def get_simulation(sim_id: str):
     session = manager.get(sim_id)
-    if session is None:
+    if session is not None:
+        return SimulationState(
+            simId=session.id,
+            status=session.status,
+            tickCount=len(session.history),
+            latest=session.history[-1] if session.history else None,
+            summary=session.summary() if session.status in ("complete", "stopped") else None,
+        )
+
+    persisted = await asyncio.to_thread(load_persisted, sim_id)
+    if persisted is None:
         raise HTTPException(status_code=404, detail="Simulation not found")
+
+    row = persisted["row"]
+    points = persisted["points"]
+    summary = SimSummary.model_validate(row["summary"]) if row.get("summary") else None
     return SimulationState(
-        simId=session.id,
-        status=session.status,
-        tickCount=len(session.history),
-        latest=session.history[-1] if session.history else None,
-        summary=session.summary() if session.status in ("complete", "stopped") else None,
+        simId=sim_id,
+        status=row["status"],
+        tickCount=len(points),
+        latest=points[-1] if points else None,
+        summary=summary,
     )
 
 
 @router.delete("/{sim_id}")
 async def delete_simulation(sim_id: str):
     session = manager.get(sim_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    session.stop("Deleted")
-    manager.delete(sim_id)
+    if session is not None:
+        session.stop("Deleted")
+        manager.delete(sim_id)
+    await asyncio.to_thread(delete_persisted, sim_id)
     return {"message": f"Simulation {sim_id} deleted"}
 
 
@@ -110,6 +126,14 @@ async def stream_simulation(ws: WebSocket, sim_id: str):
     if session is None:
         await ws.close(code=4404)
         return
+
+    # Resolve route name once for persistence (best-effort).
+    route_name = session.config.routeId
+    try:
+        route_row = _fetch_route_row(session.config.routeId)
+        route_name = route_row.get("name", route_name)
+    except Exception:
+        pass
 
     await ws.accept()
     await ws.send_json({"type": "status", "data": {"simId": sim_id, "status": session.status}})
@@ -163,6 +187,26 @@ async def stream_simulation(ws: WebSocket, sim_id: str):
             await ws.send_json({"type": "summary", "data": summary.model_dump()})
         elif session.status == "stopped":
             await ws.send_json({"type": "stopped", "data": {"reason": session.stop_reason}})
+
+        # Fire-and-forget: persist telemetry + charts without blocking WS close.
+        if session.status in ("complete", "stopped"):
+            hist_snapshot = list(session.history)
+            summary_snapshot = session.summary().model_dump()
+
+            async def _persist_bg() -> None:
+                await asyncio.to_thread(
+                    persist_session,
+                    sim_id=sim_id,
+                    route_name=route_name,
+                    rider_ref=None,
+                    status=session.status,
+                    stop_reason=session.stop_reason,
+                    config=session.config.model_dump(),
+                    summary=summary_snapshot,
+                    history=hist_snapshot,
+                    created_at=session.created_at,
+                )
+            asyncio.ensure_future(_persist_bg())
     except WebSocketDisconnect:
         pass
     finally:

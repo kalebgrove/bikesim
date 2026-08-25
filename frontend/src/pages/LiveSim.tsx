@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { useSimulation, useRoute } from "../hooks/useStore";
 import { useSimEngineContext } from "../lib/simEngineContext";
@@ -45,6 +46,7 @@ export default function LiveSim() {
   const route = useRoute(sim?.config.routeId);
   const { wsStatus, pause, resume, restart, hardStop } = useSimEngineContext();
   const navigate = useNavigate();
+  const [hoverDistKm, setHoverDistKm] = useState<number | null>(null);
 
   if (!sim) {
     return (
@@ -61,8 +63,9 @@ export default function LiveSim() {
   const speedKph = latest ? latest.speed * 3.6 : 0;
   const history = sim.history;
 
-  // Last 80 points for live chart
-  const chartData = history.slice(-80).map((p) => ({
+  // Full history for live chart (downsample if >600 points for performance)
+  const chartStep = Math.max(1, Math.floor(history.length / 600));
+  const chartData = history.filter((_, i) => i % chartStep === 0).map((p) => ({
     t: Math.floor(p.t),
     target: Math.round(p.targetPower),
     realized: Math.round(p.realizedPower),
@@ -245,10 +248,17 @@ export default function LiveSim() {
             {route ? (
               <>
                 <div className="flex-1 overflow-hidden">
-                  <RouteSvg route={route} currentDistKm={latest?.dist} width={700} height={300} />
+                  <RouteSvg
+                    route={route}
+                    currentDistKm={latest?.dist}
+                    hoverDistKm={hoverDistKm}
+                    onHoverDistKm={setHoverDistKm}
+                    width={700}
+                    height={300}
+                  />
                 </div>
                 <div className="border-t px-3 py-2" style={{ borderColor: "var(--border)", background: "var(--muted)" }}>
-                  <ElevationProfile route={route} currentDistKm={latest?.dist} heightPx={90} />
+                  <ElevationProfile route={route} currentDistKm={latest?.dist} hoverDistKm={hoverDistKm} heightPx={90} />
                 </div>
               </>
             ) : (
@@ -265,7 +275,7 @@ export default function LiveSim() {
           >
             <div className="px-3 py-2 border-b" style={{ borderColor: "var(--border)" }}>
               <span className="text-xs uppercase tracking-widest" style={{ color: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }}>
-                Live Power (last 80 ticks)
+                Live Power
               </span>
             </div>
             <div className="flex-1 p-2">

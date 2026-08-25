@@ -3,6 +3,8 @@ import type { Route } from "../lib/types";
 interface Props {
   route: Route;
   currentDistKm?: number;
+  hoverDistKm?: number | null;
+  onHoverDistKm?: (distKm: number | null) => void;
   width?: number;
   height?: number;
 }
@@ -15,7 +17,7 @@ function gradeStroke(grade: number): string {
   return "#475569";
 }
 
-export default function RouteSvg({ route, currentDistKm, width = 400, height = 300 }: Props) {
+export default function RouteSvg({ route, currentDistKm, hoverDistKm, onHoverDistKm, width = 400, height = 300 }: Props) {
   if (route.points.length < 2) return null;
 
   // Project lat/lon to screen coords
@@ -31,9 +33,15 @@ export default function RouteSvg({ route, currentDistKm, width = 400, height = 3
   const scaleY = (height - pad * 2) / (maxLat - minLat || 1);
   const scale = Math.min(scaleX, scaleY);
 
+  // Center the projected route within the SVG
+  const routeW = (maxLon - minLon) * scale;
+  const routeH = (maxLat - minLat) * scale;
+  const offsetX = (width - routeW) / 2;
+  const offsetY = (height - routeH) / 2;
+
   function project(lat: number, lon: number): [number, number] {
-    const x = pad + (lon - minLon) * scale;
-    const y = height - pad - (lat - minLat) * scale;
+    const x = offsetX + (lon - minLon) * scale;
+    const y = height - offsetY - (lat - minLat) * scale;
     return [x, y];
   }
 
@@ -67,21 +75,60 @@ export default function RouteSvg({ route, currentDistKm, width = 400, height = 3
   const [startX, startY] = project(pts[0].lat, pts[0].lon);
   const [endX, endY] = project(pts[pts.length - 1].lat, pts[pts.length - 1].lon);
 
+  // Projected points for nearest-point lookup on hover
+  const projected = pts.map((p) => ({ ...p, ...{ px: project(p.lat, p.lon)[0], py: project(p.lat, p.lon)[1] } }));
+
+  function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
+    if (!onHoverDistKm) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * width;
+    const my = ((e.clientY - rect.top) / rect.height) * height;
+    let best = projected[0];
+    let bestD = Infinity;
+    for (const p of projected) {
+      const d = (p.px - mx) ** 2 + (p.py - my) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
+    onHoverDistKm(best.distance);
+  }
+
+  function handleMouseLeave() {
+    onHoverDistKm?.(null);
+  }
+
+  // Hover marker position
+  let hoverX = -100, hoverY = -100;
+  if (hoverDistKm != null) {
+    for (let i = 0; i < pts.length; i++) {
+      if (pts[i].distance <= hoverDistKm) {
+        [hoverX, hoverY] = project(pts[i].lat, pts[i].lon);
+      }
+    }
+    if (hoverX < 0 && pts.length > 0) {
+      [hoverX, hoverY] = project(pts[0].lat, pts[0].lon);
+    }
+  }
+
   return (
     <svg
       width="100%"
       height="100%"
       viewBox={`0 0 ${width} ${height}`}
       style={{ background: "#080b10" }}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
     >
       {/* Grid lines */}
       {[1, 2, 3, 4].map((i) => (
         <line
           key={i}
-          x1={pad}
-          y1={pad + ((height - pad * 2) / 4) * i}
-          x2={width - pad}
-          y2={pad + ((height - pad * 2) / 4) * i}
+          x1={offsetX}
+          y1={offsetY + ((height - offsetY * 2) / 4) * i}
+          x2={offsetX + routeW}
+          y2={offsetY + ((height - offsetY * 2) / 4) * i}
           stroke="#1a2638"
           strokeWidth={0.5}
         />
@@ -119,6 +166,14 @@ export default function RouteSvg({ route, currentDistKm, width = 400, height = 3
           <circle cx={riderX} cy={riderY} r={10} fill="#38bdf8" fillOpacity={0.15} />
           <circle cx={riderX} cy={riderY} r={5} fill="#38bdf8" />
           <circle cx={riderX} cy={riderY} r={3} fill="#fff" />
+        </>
+      )}
+
+      {/* Hover marker */}
+      {hoverDistKm != null && hoverX > 0 && (
+        <>
+          <circle cx={hoverX} cy={hoverY} r={4} fill="#f59e0b" fillOpacity={0.3} />
+          <circle cx={hoverX} cy={hoverY} r={2.5} fill="#f59e0b" />
         </>
       )}
 

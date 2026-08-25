@@ -12,10 +12,15 @@ function gradeColor(grade: number): string {
 interface Props {
   route: Route;
   currentDistKm?: number;
+  hoverDistKm?: number | null;
   heightPx?: number;
+  strokeColor?: string;
+  gradientId?: string;
 }
 
-export default function ElevationProfile({ route, currentDistKm, heightPx = 120 }: Props) {
+export default function ElevationProfile({ route, currentDistKm, hoverDistKm, heightPx = 120, strokeColor, gradientId }: Props) {
+  const color = strokeColor ?? "#38bdf8";
+  const gradId = gradientId ?? "elevGrad";
   const step = Math.max(1, Math.floor(route.points.length / 300));
   const data = route.points.filter((_, i) => i % step === 0).map((p) => ({
     dist: parseFloat(p.distance.toFixed(1)),
@@ -31,9 +36,9 @@ export default function ElevationProfile({ route, currentDistKm, heightPx = 120 
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
           <defs>
-            <linearGradient id="elevGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="#38bdf8" stopOpacity={0.02} />
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor={color} stopOpacity={0.3} />
+              <stop offset="95%" stopColor={color} stopOpacity={0.02} />
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#1a2638" vertical={false} />
@@ -61,14 +66,17 @@ export default function ElevationProfile({ route, currentDistKm, heightPx = 120 
             labelFormatter={(v) => `${v} km`}
           />
           {currentDistKm !== undefined && (
-            <ReferenceLine x={parseFloat(currentDistKm.toFixed(1))} stroke="#38bdf8" strokeWidth={1.5} strokeDasharray="4 2" />
+            <ReferenceLine x={parseFloat(currentDistKm.toFixed(1))} stroke={color} strokeWidth={1.5} strokeDasharray="4 2" />
+          )}
+          {hoverDistKm != null && (
+            <ReferenceLine x={parseFloat(hoverDistKm.toFixed(1))} stroke="#f59e0b" strokeWidth={1} strokeDasharray="3 2" />
           )}
           <Area
             type="monotone"
             dataKey="elev"
-            stroke="#38bdf8"
+            stroke={color}
             strokeWidth={1.5}
-            fill="url(#elevGrad)"
+            fill={`url(#${gradId})`}
             dot={false}
             activeDot={{ r: 3, fill: "#38bdf8", stroke: "none" }}
           />
