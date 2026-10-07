@@ -28,7 +28,7 @@ def rider_from_config(cfg: RiderConfig) -> Rider:
         f_max=max(50.0, cfg.ftp * 6.0),
         cda=cfg.cda,
         crr=cfg.crr,
-        inertia=1.0,
+        inertia=0.15,  # both wheels, kg*m^2
         wheel_radius=0.35,
         metabolic_efficiency=0.22,
     )
@@ -41,6 +41,7 @@ class SimulationSession:
         self.route = route
         self.config = config
         self.total_distance_m = route.total_distance()
+        self._envelope = physics.braking_envelope(route)
         self.status = "running"
         self.stop_reason = None
         self.created_at = datetime.now(timezone.utc).isoformat()
@@ -92,31 +93,33 @@ class SimulationSession:
         env = self.config.environment
         p_target = self.config.strategy.targetPower
 
-        slope_pct, _, _, _, _ = self.route.slope_at(min(self.position_m, self.total_distance_m))
+        pos_clamped = min(self.position_m, self.total_distance_m)
+        slope_pct, _, _, _, _ = self.route.slope_at(pos_clamped)
+        heading = self.route.heading_at(pos_clamped)
 
-        bike_velocity_vector = (self.velocity, 0.0)
+        # World-frame wind projected onto the current heading, so a fixed compass
+        # wind becomes head/tail/cross as the route turns.
+        bike_velocity_vector = (self.velocity * math.sin(heading), self.velocity * math.cos(heading))
         wind_vector = wind.wind_vector_from_bearing(env.windSpeed, env.windBearing)
-        apparent_wind_speed, yaw_angle = wind.apparent_wind(bike_velocity_vector, wind_vector)
+        apparent_wind_speed, yaw_angle = wind.apparent_wind(bike_velocity_vector, wind_vector, heading)
+        v_rel = wind.longitudinal_airspeed(heading, self.velocity, wind_vector)
 
         grav_force, rolling_force, aero_force = physics.resistive_components(
-            self.rider, slope_pct, apparent_wind_speed, env.airDensity
+            self.rider, slope_pct, v_rel, env.airDensity
         )
         resistive = grav_force + rolling_force + aero_force
 
-        drive = physics.drive_force(self.rider, max(self.velocity, 1e-3), p_target)
-        acceleration = (drive - resistive) / self.rider.mass
+        # Same force balance as physics.step (shared helper), braking down to the corner envelope.
+        v_limit = physics.envelope_speed_at(self._envelope, pos_clamped)
+        v_new, drive, braking = physics.advance_velocity(self.rider, self.velocity, p_target, resistive, h, v_limit)
+        spun_out = p_target > 0.0 and self.velocity >= physics.SPIN_OUT_SPEED
+        realized_power = drive * v_new / physics.DRIVETRAIN_EFFICIENCY  # 0 when braking or spun out (drive = 0)
 
-        v_raw = self.velocity + acceleration * h
-        v_max_corner = physics.max_cornering_velocity(self.route, self.position_m, slope_pct)
-
-        clamped = v_raw > v_max_corner
-        v_new = min(max(v_raw, 0.0), v_max_corner)
-
-        if clamped:
-            realized_power = 0.0
-            limit_reason = f"Cornering limit {v_max_corner:.1f} m/s — coasting"
+        if braking:
+            limit_reason = f"Braking for corner — limit {v_limit:.1f} m/s"
+        elif spun_out:
+            limit_reason = f"Spun out above {physics.SPIN_OUT_SPEED * 3.6:.0f} km/h — coasting"
         else:
-            realized_power = drive * self.velocity
             limit_reason = None
 
         self.position_m += v_new * h
@@ -133,7 +136,7 @@ class SimulationSession:
             "apparent_wind_speed": apparent_wind_speed,
             "yaw_angle": yaw_angle,
             "elevation": elevation,
-            "clamped": clamped,
+            "limited": braking or spun_out,
             "limit_reason": limit_reason,
             "drive": drive,
         }
@@ -154,7 +157,7 @@ class SimulationSession:
 
             for _ in range(n_substeps):
                 last = self._substep(h)
-                if last["clamped"]:
+                if last["limited"]:
                     force_limited = True
                     limit_reason = last["limit_reason"]
 

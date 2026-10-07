@@ -10,6 +10,13 @@ class Rider:
         self.wheel_radius = wheel_radius
         self.metabolic_efficiency = metabolic_efficiency
 
+    @property
+    def effective_mass(self) -> float:
+        # Accelerating the bike also spins up the wheels: m_eff = m + I / r^2 (kg),
+        # with inertia = I of BOTH wheels combined (kg*m^2), wheel_radius r (m).
+        # Use m_eff for F = m_eff * a only; gravity and rolling still use self.mass.
+        return self.mass + self.inertia / self.wheel_radius ** 2
+
     # def test_rider(self):
     #     self.name = input("Enter rider name: ")
     #     self.mass = float(input("Enter rider mass (kg): ")) + float(input("Enter bike mass (kg): "))

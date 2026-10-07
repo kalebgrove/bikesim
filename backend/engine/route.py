@@ -69,12 +69,21 @@ class Route:
         return j - 1, j
 
 
+    SLOPE_HALF_SPAN_M = 25.0
+
     def slope_at(self, distance_m):
-        #Calculate the slope gradient at a given position
+        #Calculate the slope gradient (%) at a given position.
+        # Central difference over +/-SLOPE_HALF_SPAN_M instead of between neighbouring
+        # points: GPX elevations are often whole metres, so a 1 m step across a 6 m
+        # segment would read as a fake 16% grade.
         i, j = self._bracketing_indexes(distance_m)
-        rise = self.points[j][2] - self.points[i][2]
-        run = self._cumulative[j] - self._cumulative[i]
-        return (rise / run) * 100, self.points[i][2], self.points[j][2], self._cumulative[i], self._cumulative[j] if run else 0.0
+        total = self.total_distance()
+        s0 = max(distance_m - self.SLOPE_HALF_SPAN_M, 0.0)
+        s1 = min(distance_m + self.SLOPE_HALF_SPAN_M, total)
+        run = s1 - s0
+        rise = self.position_at(s1)[2] - self.position_at(s0)[2]
+        grade = (rise / run) * 100 if run > 0 else 0.0
+        return grade, self.points[i][2], self.points[j][2], self._cumulative[i], self._cumulative[j]
 
 
     def total_distance(self) -> float:
@@ -97,13 +106,8 @@ class Route:
     def geometry(self) -> list[dict]:
         #Route points shaped like the frontend RoutePoint: distance in km, grade in %
         out = []
-        n = len(self.points)
         for i, (lat, lon, ele) in enumerate(self.points):
-            if i < n - 1:
-                run = self._cumulative[i + 1] - self._cumulative[i]
-                grade = ((self.points[i + 1][2] - ele) / run * 100) if run > 1e-9 else 0.0
-            else:
-                grade = out[-1]["grade"] if out else 0.0
+            grade, *_ = self.slope_at(self._cumulative[i])
             out.append({
                 "distance": round(self._cumulative[i] / 1000, 6),
                 "elevation": round(ele, 2),
@@ -128,7 +132,8 @@ class Route:
 
     def position_at(self, distance_m):
         i, j = self._bracketing_indexes(distance_m)
-        t = (distance_m - self._cumulative[i]) / (self._cumulative[j] - self._cumulative[i])
+        run = self._cumulative[j] - self._cumulative[i]
+        t = (distance_m - self._cumulative[i]) / run if run else 0.0  # duplicate GPX points give run == 0
         lat = self.points[i][0] + t * (self.points[j][0] - self.points[i][0])
         lon = self.points[i][1] + t * (self.points[j][1] - self.points[i][1])
         ele = self.points[i][2] + t * (self.points[j][2] - self.points[i][2])
