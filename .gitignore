@@ -9,3 +9,6 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# RL training output (model weights, logs)
+checkpoints*/
