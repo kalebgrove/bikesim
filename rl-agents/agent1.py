@@ -65,7 +65,7 @@ class Agent:
         gamma: float = 0.99,
         epsilon_start: float = 1.0,
         epsilon_end: float = 0.01,
-        epsilon_decay: int = 200_000,
+        epsilon_decay: int = 1_000_000,  # ~380 episodes of exploration; at 200k it hit the floor by ~ep 60 and braking was barely tried
         tau: float = 0.005,
         learn_every: int = 4,
     ):
@@ -163,9 +163,14 @@ class Agent:
 
     def load(self, path: str):
         checkpoint = torch.load(path, map_location=device)
+        # Fail with a readable message instead of a tensor size mismatch from load_state_dict
+        saved = (checkpoint.get("n_state", self.n_state), checkpoint.get("n_actions", self.n_actions))
+        if saved != (self.n_state, self.n_actions):
+            raise ValueError(
+                f"{path} has n_state={saved[0]}, n_actions={saved[1]}; "
+                f"this agent has n_state={self.n_state}, n_actions={self.n_actions}"
+            )
         self.policy_net.load_state_dict(checkpoint["policy_net"])
         self.target_net.load_state_dict(checkpoint["target_net"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])
         self.steps_done = checkpoint.get("steps_done", self.steps_done)
-        self.n_state = checkpoint.get("n_state", self.n_state)
-        self.n_actions = checkpoint.get("n_actions", self.n_actions)

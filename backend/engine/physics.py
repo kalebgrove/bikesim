@@ -137,7 +137,7 @@ def advance_velocity(rider: rider_module, velocity: float, p_target: float, resi
 
     return max(0.0, new_velocity), drive, braking
 
-def step(rider: rider_module, route: route_module, position: float, velocity: float, slope: float, v_rel: float, p_target: float, dt: float, air_density: float, break_force: float, v_limit: float = math.inf) -> tuple[float, float, float, float]:
+def step(rider: rider_module, route: route_module, position: float, velocity: float, slope: float, v_rel: float, p_target: float, dt: float, air_density: float, break_force: float, v_limit: float = math.inf) -> tuple[float, float, float]:
     #Calculate the new velocity and position after a time step dt.
     # v_limit: speed the rider brakes down to (e.g. from braking_envelope). Leave at inf
     # when an agent controls braking itself and should face the cornering limit.
@@ -147,13 +147,11 @@ def step(rider: rider_module, route: route_module, position: float, velocity: fl
 
     new_velocity, drive, _ = advance_velocity(rider, velocity, p_target, resistive, dt, v_limit)
 
-    max_velocity = max_cornering_velocity(route, position, slope)
-
     p_realized = drive * new_velocity / DRIVETRAIN_EFFICIENCY  # Pedal power; equals p_target unless f_max-limited
 
     position += new_velocity * dt  # Update position
 
-    return position, new_velocity, max_velocity, p_realized
+    return position, new_velocity, p_realized
 
 
 
@@ -181,7 +179,8 @@ def simulate(rider: rider_module, route: route_module, wind_velocity_vector: tup
         v_rel = wind_module.longitudinal_airspeed(heading, velocity, wind_velocity_vector)
 
         v_limit = envelope_speed_at(envelope, position)
-        position, velocity, max_velocity, p_realized = step(rider, route, position, velocity, slope, v_rel, p_target, dt, air_density, 0.0, v_limit)
+        max_velocity = max_cornering_velocity(route, position, slope)  # cornering limit at the start of the step, for the output
+        position, velocity, p_realized = step(rider, route, position, velocity, slope, v_rel, p_target, dt, air_density, 0.0, v_limit)
 
         mechanical_joules += p_realized * dt  # Accumulate mechanical energy
 

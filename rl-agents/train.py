@@ -81,14 +81,15 @@ def main():
     parser.add_argument("--checkpoint-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkpoints"), help="Directory to store checkpoints.")
     parser.add_argument("--resume", default=None, help="Checkpoint file to resume training from.")
     parser.add_argument("--log-every", type=int, default=50, help="Log progress every N episodes.")
-    parser.add_argument("--save-every", type=int, default=500, help="Save checkpoint every N episodes.")
+    parser.add_argument("--save-every", type=int, default=100, help="Save checkpoint (and run a greedy ride for best.pt) every N episodes.")
     parser.add_argument("--max-steps", type=int, default=40_000, help="Max steps per episode.")
     args = parser.parse_args()
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
     env = build_env(args.route, args.dt, (args.wind_x, args.wind_y))
-    print(f"Route length: {env.total_distance / 1000:.2f} km | Curves detected: {len(env.curves)}")
+    limited_m = sum(v < env.CURVE_SPEED_CAP for v in env.speed_limits) * env.LIMIT_SPACING_M
+    print(f"Route length: {env.total_distance / 1000:.2f} km | Corner-limited: {limited_m:.0f} m")
     print(f"State dim: {env.n_state} | Action count: {env.n_actions}")
 
     agent = Agent(n_state=env.n_state, n_actions=env.n_actions)
@@ -98,7 +99,7 @@ def main():
 
     rewards = []
     ride_times = []
-    best_mean = -float("inf")
+    best_time = float("inf")
     start = time.time()
 
     for episode in range(1, args.episodes + 1):
@@ -123,9 +124,12 @@ def main():
             )
 
         if episode % args.save_every == 0:
-            mean_recent = np.mean(rewards[-args.save_every:])
-            if mean_recent > best_mean:
-                best_mean = mean_recent
+            # Pick best.pt by a greedy (epsilon = 0) ride: training reward includes random actions
+            greedy = run_episode(env, agent, train=False, max_steps=args.max_steps)
+            greedy_ride = f"{greedy['time'] / 60:.2f} min" if greedy["finished"] else "DNF"
+            print(f"  greedy ride: {greedy_ride}, crashes={greedy['crashes']}", flush=True)
+            if greedy["finished"] and greedy["time"] < best_time:
+                best_time = greedy["time"]
                 path = os.path.join(args.checkpoint_dir, "best.pt")
                 agent.save(path)
             path = os.path.join(args.checkpoint_dir, f"episode_{episode}.pt")
