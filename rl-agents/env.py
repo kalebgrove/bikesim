@@ -21,7 +21,7 @@ class BikeSimEnv:
     W_PRIME = 20_000.0      # J, anaerobic work capacity above critical power (typical 15-25 kJ)
     TIME_PENALTY = 1.0      # reward per second elapsed (negative)
     PROGRESS_REWARD = 0.1   # reward per metre covered (shaping; sums to a constant at the finish)
-    CRASH_PENALTY = 50.0    # on top of the time lost re-accelerating from 0
+    CRASH_PENALTY = 200.0   # on top of the time lost re-accelerating from 0; at 50 the agent accepted ~15 crashes/ride instead of braking
     LIMIT_SPACING_M = physics.ENVELOPE_SPACING_M  # speed-limit grid, shared by observation and crash check
     CURVE_HORIZON_M = 500.0
     CURVE_SPEED_CAP = 30.0  # m/s; grid points with a higher limit don't count as curves

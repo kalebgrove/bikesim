@@ -65,7 +65,7 @@ class Agent:
         gamma: float = 0.99,
         epsilon_start: float = 1.0,
         epsilon_end: float = 0.01,
-        epsilon_decay: int = 1_000_000,  # ~380 episodes of exploration; at 200k it hit the floor by ~ep 60 and braking was barely tried
+        epsilon_decay: int = 3_000_000,  # at ~3.5k steps/episode: eps ~0.31 at ep 200, 0.12 at ep 400, 0.05 at ep 600. At 1M it was 0.04 by ep 200 and braking was never learned
         tau: float = 0.005,
         learn_every: int = 4,
     ):
