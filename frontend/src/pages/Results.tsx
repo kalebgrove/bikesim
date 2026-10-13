@@ -1,276 +1,187 @@
 import { useParams, Link } from "react-router";
-import { useSimulation, useRoute } from "../hooks/useStore";
-import {
-  ComposedChart,
-  Area,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-  Legend,
-} from "recharts";
+import { useSimulation } from "../hooks/useStore";
+import { ComposedChart, Area, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
+import { ButtonLink, Callout, EmptyState, PageHeader, Panel, StatCell, StatStrip, StatusBadge, chartTheme } from "../components/ui";
+import { fmtClock, fmtDuration, fixed } from "../lib/format";
 
-function fmtTime(s: number) {
-  if (!isFinite(s)) return "--";
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
-  return h > 0 ? `${h}h ${m}m ${sec}s` : `${m}m ${sec}s`;
-}
-
-function safe(n: number, dec = 1): string {
-  return isFinite(n) ? n.toFixed(dec) : "--";
-}
+const th = "label text-left font-medium px-4 h-9 border-b border-line";
+const td = "num px-4 h-11 border-b border-line";
 
 export default function Results() {
   const { simId } = useParams<{ simId: string }>();
   const sim = useSimulation(simId);
-  const route = useRoute(sim?.config.routeId);
 
   if (!sim) {
     return (
-      <div className="flex items-center justify-center h-64 text-sm" style={{ color: "var(--muted-foreground)" }}>
-        Simulation not found.{" "}
-        <Link to="/" className="ml-2 underline" style={{ color: "var(--primary)" }}>
-          Dashboard →
+      <EmptyState title="Simulation not found">
+        <Link to="/" className="text-accent hover:underline">
+          Back to overview
         </Link>
-      </div>
+      </EmptyState>
     );
   }
 
-  if (sim.status !== "complete") {
+  if (sim.status !== "complete" || !sim.summary) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3 text-sm">
-        <div style={{ color: "var(--muted-foreground)" }}>
-          Simulation is <strong style={{ color: "var(--foreground)" }}>{sim.status}</strong> — results not yet available.
-        </div>
-        <Link
-          to={`/simulations/${sim.id}/live`}
-          className="px-3 py-1.5 text-xs rounded"
-          style={{ background: "var(--primary)", color: "var(--primary-foreground)" }}
-        >
-          Go to Live View →
+      <EmptyState title={`Results not available — run is ${sim.status}`}>
+        <Link to={`/simulations/${sim.id}/live`} className="text-accent hover:underline">
+          Open live view
         </Link>
-      </div>
+      </EmptyState>
     );
   }
 
-  const summary = sim.summary!;
-  const history = sim.history;
+  const summary = sim.summary;
+  const { rider, environment, strategy, simSettings } = sim.config;
 
-  // Downsample history for chart (max 400 points)
-  const step = Math.max(1, Math.floor(history.length / 400));
-  const chartData = history.filter((_, i) => i % step === 0).map((p) => ({
-    t: Math.round(p.t),
-    target: Math.round(p.targetPower),
-    realized: Math.round(p.realizedPower),
-    speed: parseFloat((p.speed * 3.6).toFixed(1)),
-    elev: Math.round(p.elevation),
-    grade: parseFloat(p.grade.toFixed(1)),
-  }));
+  // Downsample history for charts (max ~400 points), plotted against distance
+  const step = Math.max(1, Math.floor(sim.history.length / 400));
+  const chartData = sim.history
+    .filter((_, i) => i % step === 0)
+    .map((p) => ({
+      dist: parseFloat(p.dist.toFixed(2)),
+      t: p.t,
+      realized: Math.round(p.realizedPower),
+      speed: parseFloat((p.speed * 3.6).toFixed(1)),
+      elev: Math.round(p.elevation),
+    }));
+
+  const xAxis = (
+    <XAxis
+      dataKey="dist"
+      type="number"
+      domain={[0, "dataMax"]}
+      tick={chartTheme.tick}
+      tickLine={false}
+      axisLine={false}
+      tickFormatter={(v) => `${Number(v).toFixed(1)} km`}
+    />
+  );
+  const tooltip = <Tooltip {...chartTheme.tooltip} labelFormatter={(v) => `${Number(v).toFixed(2)} km`} />;
+
+  const params: [string, string][] = [
+    ["System mass", `${rider.mass} kg`],
+    ["FTP", `${rider.ftp} W`],
+    ["CdA", `${rider.cda} m²`],
+    ["Crr", String(rider.crr)],
+    ["Wind speed", `${environment.windSpeed} m/s`],
+    ["Wind from", `${environment.windBearing}°`],
+    ["Temperature", `${environment.temperature} °C`],
+    ["Air density ρ₀", `${environment.airDensity} kg/m³`],
+    ["Strategy", strategy.type.replace("_", " ")],
+    ["Target power", `${strategy.targetPower} W`],
+    ["Time step", `${simSettings.timeStepS} s`],
+    ["Tick interval", `${simSettings.tickIntervalMs} ms`],
+  ];
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="text-xs mb-1" style={{ color: "var(--muted-foreground)" }}>
-            <Link to="/" className="hover:underline">Dashboard</Link>
-            {" / "}
-            <Link to={`/routes/${sim.config.routeId}`} className="hover:underline">Route</Link>
-            {" / "}
-            Results
-          </div>
-          <h1 className="text-xl font-bold" style={{ fontFamily: "var(--font-sans)" }}>
-            Simulation Results
-          </h1>
-          <p className="text-xs mt-1 mono" style={{ color: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }}>
-            {sim.routeName} · {sim.id}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Link
-            to={`/routes/${sim.config.routeId}/configure`}
-            className="px-3 py-1.5 text-xs rounded border"
-            style={{ border: "1px solid var(--border)", color: "var(--foreground)" }}
-          >
-            New simulation →
-          </Link>
-        </div>
-      </div>
-
-      {/* Summary stats */}
-      <div className="grid grid-cols-6 gap-px" style={{ background: "var(--border)" }}>
-        {[
-          { label: "Finish Time", value: fmtTime(summary.totalTimeS), mono: true },
-          { label: "Distance", value: `${safe(summary.totalDistKm)} km`, mono: true },
-          { label: "Avg Speed", value: `${safe(summary.avgSpeedKph)} kph`, mono: true },
-          { label: "Avg Realized Power", value: `${safe(summary.avgRealizedPower, 0)} W`, mono: true, highlight: true },
-          { label: "Norm. Power", value: `${safe(summary.normPower, 0)} W`, mono: true },
-          { label: "Total Energy", value: `${safe(summary.totalEnergyKj, 1)} kJ`, mono: true },
-        ].map((s) => (
-          <div key={s.label} className="px-4 py-3" style={{ background: "var(--card)" }}>
-            <div className="text-xs uppercase tracking-widest mb-1" style={{ color: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }}>
-              {s.label}
-            </div>
-            <div
-              className="text-xl font-semibold mono"
-              style={{
-                color: s.highlight ? "var(--primary)" : "var(--foreground)",
-                fontFamily: s.mono ? "var(--font-mono)" : "var(--font-sans)",
-              }}
-            >
-              {s.value}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Power analysis chart */}
-      <div className="border" style={{ border: "1px solid var(--border)", background: "var(--card)" }}>
-        <div className="px-4 py-2 border-b flex justify-between items-center" style={{ borderColor: "var(--border)" }}>
-          <span className="text-xs uppercase tracking-widest" style={{ color: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }}>
-            Target vs Realized Power — Full Race
+    <div className="max-w-[1400px] mx-auto px-6 py-6 space-y-6">
+      <PageHeader
+        eyebrow={<span className="num normal-case tracking-normal">Results · {sim.id}</span>}
+        title={
+          <span className="flex items-center gap-3">
+            {sim.routeName} <StatusBadge status={sim.status} />
           </span>
-          <span className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-            Force-limited sections show realized below target
-          </span>
-        </div>
-        <div className="p-4" style={{ height: 220 }}>
+        }
+        subtitle={`Constant ${strategy.targetPower} W · ${rider.mass} kg · CdA ${rider.cda} m²`}
+        actions={
+          <>
+            <ButtonLink to={`/simulations/${sim.id}/live`} variant="ghost">
+              Live view
+            </ButtonLink>
+            <ButtonLink to={`/routes/${sim.config.routeId}/configure`} variant="primary">
+              New run
+            </ButtonLink>
+          </>
+        }
+      />
+
+      {summary.stopReason && (
+        <Callout tone="warn" title="Stop reason">
+          {summary.stopReason}
+        </Callout>
+      )}
+
+      <StatStrip cols="grid-cols-2 md:grid-cols-4 xl:grid-cols-8">
+        <StatCell label="Finish time" value={fmtClock(summary.totalTimeS)} tone="accent" size="lg" />
+        <StatCell label="Distance" value={fixed(summary.totalDistKm, 2)} unit="km" />
+        <StatCell label="Avg speed" value={fixed(summary.avgSpeedKph)} unit="km/h" />
+        <StatCell label="Max speed" value={fixed(summary.maxSpeedKph)} unit="km/h" />
+        <StatCell label="Avg power" value={fixed(summary.avgRealizedPower, 0)} unit="W" />
+        <StatCell label="Norm. power" value={fixed(summary.normPower, 0)} unit="W" />
+        <StatCell label="Mechanical work" value={fixed(summary.totalEnergyKj, 1)} unit="kJ" />
+        <StatCell label="Metabolic" value={fixed(summary.kcalBurned, 0)} unit="kcal" />
+      </StatStrip>
+
+      <Panel title="Power vs elevation" meta="Realized pedal power against distance" bodyClassName="h-[280px] p-3">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={chartData} throttledEvents={[]} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid stroke={chartTheme.grid} vertical={false} />
+            {xAxis}
+            <YAxis yAxisId="power" tick={chartTheme.tick} tickLine={false} axisLine={false} width={48} tickFormatter={(v) => `${v} W`} />
+            <YAxis yAxisId="elev" orientation="right" tick={chartTheme.tick} tickLine={false} axisLine={false} width={52} tickFormatter={(v) => `${v} m`} />
+            {tooltip}
+            <Legend wrapperStyle={{ fontSize: 11, fontFamily: "JetBrains Mono" }} iconType="plainline" />
+            <Area yAxisId="elev" type="monotone" dataKey="elev" fill={chartTheme.colors.elev} fillOpacity={0.1} stroke={chartTheme.colors.elev} strokeOpacity={0.5} strokeWidth={1} dot={false} name="Elevation (m)" isAnimationActive={false} />
+            <Line yAxisId="power" type="monotone" dataKey="realized" stroke={chartTheme.colors.power} strokeWidth={1.5} dot={false} name="Realized (W)" isAnimationActive={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </Panel>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <Panel title="Speed profile" meta="km/h" bodyClassName="h-[240px] p-3">
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1a2638" vertical={false} />
-              <XAxis
-                dataKey="t"
-                tick={{ fill: "#526278", fontSize: 10, fontFamily: "JetBrains Mono" }}
-                tickLine={false}
-                axisLine={false}
-                tickFormatter={fmtTime}
-                interval="preserveStartEnd"
-              />
-              <YAxis
-                yAxisId="power"
-                tick={{ fill: "#526278", fontSize: 10, fontFamily: "JetBrains Mono" }}
-                tickLine={false}
-                axisLine={false}
-                width={40}
-                tickFormatter={(v) => `${v}W`}
-              />
-              <YAxis
-                yAxisId="elev"
-                orientation="right"
-                tick={{ fill: "#526278", fontSize: 10, fontFamily: "JetBrains Mono" }}
-                tickLine={false}
-                axisLine={false}
-                width={44}
-                tickFormatter={(v) => `${v}m`}
-              />
-              <Tooltip
-                contentStyle={{ background: "#0c1018", border: "1px solid #1a2638", borderRadius: 2, fontSize: 10 }}
-                itemStyle={{ fontFamily: "JetBrains Mono" }}
-                labelFormatter={(v) => fmtTime(Number(v))}
-              />
-              <Legend wrapperStyle={{ fontSize: 10, fontFamily: "JetBrains Mono", color: "#526278" }} />
-              <Area yAxisId="elev" type="monotone" dataKey="elev" fill="#ffffff10" stroke="#ffffff40" strokeWidth={1.5} dot={false} name="Elevation (m)" />
-              <Line yAxisId="power" type="monotone" dataKey="target" stroke="#38bdf844" strokeWidth={1} dot={false} name="Target (W)" strokeDasharray="4 2" />
-              <Line yAxisId="power" type="monotone" dataKey="realized" stroke="#38bdf8" strokeWidth={1.5} dot={false} name="Realized (W)" />
+            <ComposedChart data={chartData} throttledEvents={[]} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+              <CartesianGrid stroke={chartTheme.grid} vertical={false} />
+              {xAxis}
+              <YAxis tick={chartTheme.tick} tickLine={false} axisLine={false} width={40} />
+              {tooltip}
+              <Line type="monotone" dataKey="speed" stroke={chartTheme.colors.speed} strokeWidth={1.5} dot={false} name="Speed (km/h)" isAnimationActive={false} />
             </ComposedChart>
           </ResponsiveContainer>
-        </div>
+        </Panel>
+
+        <Panel title="Segments" bodyClassName="overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr>
+                <th className={th}>Segment</th>
+                <th className={`${th} text-right`}>Range</th>
+                <th className={`${th} text-right`}>Time</th>
+                <th className={`${th} text-right`}>Power</th>
+                <th className={`${th} text-right`}>Speed</th>
+                <th className={`${th} text-right`}>Grade</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.segments.map((seg) => (
+                <tr key={seg.name} className="[&:last-child>td]:border-b-0">
+                  <td className={`${td} font-sans font-medium`}>{seg.name}</td>
+                  <td className={`${td} text-right text-dim`}>
+                    {fixed(seg.distStartKm)}–{fixed(seg.distEndKm)} km
+                  </td>
+                  <td className={`${td} text-right`}>{fmtDuration(seg.timeS)}</td>
+                  <td className={`${td} text-right`}>{fixed(seg.avgRealizedPower, 0)} W</td>
+                  <td className={`${td} text-right`}>{fixed(seg.avgSpeedKph)} km/h</td>
+                  <td className={`${td} text-right`}>{fixed(seg.avgGrade)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {summary.segments.length === 0 && <EmptyState title="No segment data" />}
+        </Panel>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
-        {/* Speed chart */}
-        <div className="border" style={{ border: "1px solid var(--border)", background: "var(--card)" }}>
-          <div className="px-4 py-2 border-b" style={{ borderColor: "var(--border)" }}>
-            <span className="text-xs uppercase tracking-widest" style={{ color: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }}>
-              Speed Profile
-            </span>
-          </div>
-          <div className="p-4" style={{ height: 160 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1a2638" vertical={false} />
-                <XAxis dataKey="t" tick={{ fill: "#526278", fontSize: 9, fontFamily: "JetBrains Mono" }} tickLine={false} axisLine={false} tickFormatter={fmtTime} interval="preserveStartEnd" />
-                <YAxis tick={{ fill: "#526278", fontSize: 9, fontFamily: "JetBrains Mono" }} tickLine={false} axisLine={false} width={34} tickFormatter={(v) => `${v}`} />
-                <Tooltip contentStyle={{ background: "#0c1018", border: "1px solid #1a2638", borderRadius: 2, fontSize: 10 }} itemStyle={{ fontFamily: "JetBrains Mono" }} labelFormatter={(v) => fmtTime(Number(v))} />
-                <Line type="monotone" dataKey="speed" stroke="#22c55e" strokeWidth={1.5} dot={false} name="kph" />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Segment analysis */}
-        <div className="border" style={{ border: "1px solid var(--border)", background: "var(--card)" }}>
-          <div className="px-4 py-2 border-b" style={{ borderColor: "var(--border)" }}>
-            <span className="text-xs uppercase tracking-widest" style={{ color: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }}>
-              Segment Analysis
-            </span>
-          </div>
-          <div className="divide-y" style={{ borderColor: "var(--border)" }}>
-            {summary.segments.map((seg) => (
-              <div key={seg.name} className="px-4 py-3">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-sm font-medium" style={{ color: "var(--foreground)" }}>
-                    {seg.name}
-                  </span>
-                  <span className="text-xs mono" style={{ color: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }}>
-                    {safe(seg.distStartKm)}–{safe(seg.distEndKm)} km
-                  </span>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { label: "Time", value: fmtTime(seg.timeS) },
-                    { label: "Avg Power", value: `${safe(seg.avgRealizedPower, 0)} W` },
-                    { label: "Avg Speed", value: `${safe(seg.avgSpeedKph)} kph` },
-                  ].map((s) => (
-                    <div key={s.label}>
-                      <div className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-                        {s.label}
-                      </div>
-                      <div className="text-sm mono font-medium" style={{ color: "var(--foreground)", fontFamily: "var(--font-mono)" }}>
-                        {s.value}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Config recap */}
-      <div className="border" style={{ border: "1px solid var(--border)", background: "var(--card)" }}>
-        <div className="px-4 py-2 border-b" style={{ borderColor: "var(--border)" }}>
-          <span className="text-xs uppercase tracking-widest" style={{ color: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }}>
-            Simulation Parameters
-          </span>
-        </div>
-        <div className="grid grid-cols-4 gap-px" style={{ background: "var(--border)" }}>
-          {[
-            { label: "Rider Mass", value: `${sim.config.rider.mass} kg` },
-            { label: "FTP", value: `${sim.config.rider.ftp} W` },
-            { label: "CdA", value: `${sim.config.rider.cda} m²` },
-            { label: "Crr", value: String(sim.config.rider.crr) },
-            { label: "Wind Speed", value: `${sim.config.environment.windSpeed} m/s` },
-            { label: "Wind Bearing", value: `${sim.config.environment.windBearing}°` },
-            { label: "Target Power", value: `${sim.config.strategy.targetPower} W` },
-            { label: "Strategy", value: sim.config.strategy.type.replace("_", " ") },
-          ].map((s) => (
-            <div key={s.label} className="px-4 py-3" style={{ background: "var(--card)" }}>
-              <div className="text-xs uppercase tracking-widest mb-0.5" style={{ color: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }}>
-                {s.label}
-              </div>
-              <div className="text-sm mono font-medium" style={{ color: "var(--foreground)", fontFamily: "var(--font-mono)" }}>
-                {s.value}
-              </div>
+      <Panel title="Run parameters" bodyClassName="">
+        <dl className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-px bg-line">
+          {params.map(([k, v]) => (
+            <div key={k} className="bg-panel px-4 py-3">
+              <dt className="label">{k}</dt>
+              <dd className="num text-[13px] text-fg mt-1 capitalize">{v}</dd>
             </div>
           ))}
-        </div>
-      </div>
+        </dl>
+      </Panel>
     </div>
   );
 }

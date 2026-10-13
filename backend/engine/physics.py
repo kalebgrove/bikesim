@@ -10,6 +10,7 @@ MAX_BRAKE_DECEL = 4.0           # m/s^2 (~0.4 g), hard but controlled braking
 SPIN_OUT_SPEED = 18.0           # m/s (~65 km/h), top gear at max cadence; no pedalling above this
 DRIVETRAIN_EFFICIENCY = 0.975   # P_wheel = eta * P_pedal (chain + bearings)
 ENVELOPE_SPACING_M = 5.0
+FRICTION_COEFFICIENT = 0.7      # Tyre grip on dry asphalt; shared by cornering and braking (friction circle)
 
 def resistive_components(rider: rider_module, slope: float, v_rel: float, air_density: float) -> tuple[float, float, float]:
     theta = math.atan(slope / 100)
@@ -22,6 +23,18 @@ def resistive_components(rider: rider_module, slope: float, v_rel: float, air_de
     drag_force = 0.5 * rider.cda * air_density * abs(v_rel) * v_rel
 
     return gravity_force, rolling_resistance_force, drag_force
+
+def air_density_at(sea_level_density: float, elevation_m: float) -> float:
+    # ISA troposphere (barometric formula, temperature lapse rate L = 6.5 K/km):
+    #   rho(h) = rho0 * (1 - L h / T0)^(g M / (R L) - 1),  L / T0 = 2.256e-5 1/m, exponent 4.256
+    # About -1% per 100 m: 1.225 kg/m^3 at 0 m, 1.112 at 1000 m, 1.007 at 2000 m.
+    return sea_level_density * (1.0 - 2.25577e-5 * elevation_m) ** 4.2559
+
+def metabolic_power(rider: rider_module, pedal_power: float) -> float:
+    # Gross efficiency = pedal work / TOTAL metabolic energy (resting metabolism included),
+    # so P_met = P / eta_gross while pedalling. That goes to 0 W when coasting, but the body
+    # still burns its resting rate, so floor it there: P_met = max(P / eta_gross, P_rest)  (W).
+    return max(pedal_power / rider.metabolic_efficiency, rider.resting_power)
 
 def resistive_force(rider: rider_module, slope: float, v_rel: float, air_density: float) -> float:
     #Sum of gravity, drag resistance and rolling resistance forces
@@ -71,9 +84,7 @@ def max_cornering_velocity(route: route_module, distance_m: float, slope: float)
     if radius == float('inf'):
         return float(MAX_CORNERING_VELOCITY)
 
-    friction_coefficient = 0.7  # Typical value for dry asphalt
-
-    v_max = math.sqrt(friction_coefficient * math.cos(math.atan(slope / 100)) * 9.81 * radius)
+    v_max = math.sqrt(FRICTION_COEFFICIENT * math.cos(math.atan(slope / 100)) * 9.81 * radius)
     return v_max
 
 
@@ -99,7 +110,12 @@ def braking_envelope(route: route_module, spacing_m: float = ENVELOPE_SPACING_M,
     # Highest speed at each point k * spacing_m from which the rider can still brake down
     # to every cornering limit ahead. Backward pass from the finish:
     #   v_k = min(v_corner_k, sqrt(v_{k+1}^2 + 2 * a_net * ds))
-    #   a_net = decel + g sin(theta)   (uphill helps braking, downhill hurts; drag ignored)
+    #   a_net = a_brake + g sin(theta)   (uphill helps braking, downhill hurts; drag ignored)
+    # Friction circle: the tyre's grip is shared between cornering and braking, so in a
+    # corner taken at speed v only what the lateral force leaves over can slow the bike:
+    #   a_brake = min(decel, sqrt((mu g cos(theta))^2 - (v^2 / R)^2))
+    # v at point k is what we're solving for, so evaluate the grip at the upper bound
+    # v_hi (braking at full decel): a_brake falls as v rises, so this errs on the safe side.
     total = route.total_distance()
     n = int(total // spacing_m) + 2
     envelope = [0.0] * n
@@ -107,8 +123,14 @@ def braking_envelope(route: route_module, spacing_m: float = ENVELOPE_SPACING_M,
     for k in reversed(range(n)):
         s = min(k * spacing_m, total)
         slope, *_ = route.slope_at(s)
-        a_net = max(0.5, decel + 9.81 * math.sin(math.atan(slope / 100)))
-        v_next = min(max_cornering_velocity(route, s, slope), math.sqrt(v_next ** 2 + 2 * a_net * spacing_m))
+        theta = math.atan(slope / 100)
+        v_corner = max_cornering_velocity(route, s, slope)
+        v_hi = min(v_corner, math.sqrt(v_next ** 2 + 2 * max(0.5, decel + 9.81 * math.sin(theta)) * spacing_m))
+        grip = FRICTION_COEFFICIENT * 9.81 * math.cos(theta)
+        lateral = v_hi ** 2 / curvature_radius_at(route, s)  # 0 on a straight (R = inf)
+        a_brake = min(decel, math.sqrt(max(grip ** 2 - lateral ** 2, 0.0)))
+        a_net = max(0.5, a_brake + 9.81 * math.sin(theta))  # floor ~ aero drag at 15 m/s
+        v_next = min(v_corner, math.sqrt(v_next ** 2 + 2 * a_net * spacing_m))
         envelope[k] = v_next
     return envelope
 
@@ -141,8 +163,10 @@ def step(rider: rider_module, route: route_module, position: float, velocity: fl
     #Calculate the new velocity and position after a time step dt.
     # v_limit: speed the rider brakes down to (e.g. from braking_envelope). Leave at inf
     # when an agent controls braking itself and should face the cornering limit.
+    # air_density: SEA-LEVEL density (kg/m^3); corrected here for the elevation at `position`.
 
-    gravity_force, rolling_force, drag_force = resistive_components(rider, slope, v_rel, air_density)
+    rho = air_density_at(air_density, route.position_at(position)[2])
+    gravity_force, rolling_force, drag_force = resistive_components(rider, slope, v_rel, rho)
     resistive = gravity_force + rolling_force + drag_force + break_force
 
     new_velocity, drive, _ = advance_velocity(rider, velocity, p_target, resistive, dt, v_limit)
@@ -161,7 +185,7 @@ def simulate(rider: rider_module, route: route_module, wind_velocity_vector: tup
     position = 0.0
     velocity = 0.0
     total_distance = route.total_distance()
-    mechanical_joules = 0.0
+    metabolic_joules = 0.0
 
     max_time = 3600 * 3  # 3 hours
     time_elapsed = 0.0
@@ -182,7 +206,7 @@ def simulate(rider: rider_module, route: route_module, wind_velocity_vector: tup
         max_velocity = max_cornering_velocity(route, position, slope)  # cornering limit at the start of the step, for the output
         position, velocity, p_realized = step(rider, route, position, velocity, slope, v_rel, p_target, dt, air_density, 0.0, v_limit)
 
-        mechanical_joules += p_realized * dt  # Accumulate mechanical energy
+        metabolic_joules += metabolic_power(rider, p_realized) * dt
 
         # print(f"Position: {position:.2f} m, Velocity: {velocity:.2f} m/s, Slope: {slope:.2f} %, Apparent Wind Speed: {apparent_wind_speed:.2f} m/s, Yaw Angle: {yaw_angle:.2f} degrees, Max Speed: {max_velocity:.2f} m/s")
 
@@ -190,7 +214,6 @@ def simulate(rider: rider_module, route: route_module, wind_velocity_vector: tup
 
         time_elapsed += dt
 
-    metabolic_joules = mechanical_joules / rider.metabolic_efficiency  # Calculate total metabolic energy based on efficiency
     kcal_burned = metabolic_joules / 4184  # Convert joules to kilocalories
 
     return results, kcal_burned

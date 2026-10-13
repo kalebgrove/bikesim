@@ -34,6 +34,19 @@ export default defineConfig(({ mode }) => {
       port: parseInt(process.env.PORT || '8443'),
       strictPort: true,
       watch: { ignored: ['**/.figma/**'] },
+      // Forward API calls to the FastAPI backend. /routes/... and /simulations/... are also
+      // SPA page URLs, so page loads (Accept: text/html) stay with Vite.
+      proxy: Object.fromEntries(
+        ['/routes', '/simulations', '/riders'].map((prefix) => [
+          prefix,
+          {
+            // Not "localhost": Node may resolve it to IPv6 ::1, while uvicorn listens on IPv4
+            target: process.env.BACKEND_URL || 'http://127.0.0.1:8000',
+            ws: true,
+            bypass: (req) => (req.headers.accept?.includes('text/html') ? req.url : undefined),
+          },
+        ]),
+      ),
     },
     preview: {
       host: '0.0.0.0',

@@ -65,6 +65,7 @@ export interface TelemetryPoint {
   totalEnergy: number; // kJ
   forceLimited: boolean;
   limitReason: string | null;
+  kcalBurned?: number; // metabolic energy so far (backend: P_met = max(P / η, P_rest))
 }
 
 export type SimStatus = "idle" | "running" | "paused" | "complete" | "stopped";

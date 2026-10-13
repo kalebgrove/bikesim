@@ -69,24 +69,33 @@ class BikeSimEnv:
         return min(self.speed_limits[k0:k1 + 2])
 
     def _binding_curve_ahead(self):
-        # The curve within the horizon that needs the hardest braking from the current speed:
-        # argmax over grid points of a_req = (v^2 - v_k^2) / (2 d_k), d floored at 1 m.
-        # Starts at the cell the rider is in, so the current limit is always visible.
-        # Returns (distance_m, limit_mps, a_req_mps2), or None if no curve is in range.
+        # The curve within the horizon that limits the current speed most: the one with the lowest
+        #   v_allow_k = sqrt(v_k^2 + 2 a_max d_k)   (fastest you can go now and still brake in time)
+        # Ranking by a_req = (v^2 - v_k^2) / (2 d) instead breaks below every limit: all a_req are
+        # negative and dividing by a large d pulls far curves toward 0, so a limit 0.3 m/s above
+        # the rider in its own cell lost to a curve 350 m away and the agent rode into it.
+        # Starts at the cell the rider is in, so the current limit is always a candidate.
+        # Returns (distance_m, limit_mps, a_req_mps2) with a_req for that curve (d floored at
+        # 1 m), or None if no curve is in range.
         ds = self.LIMIT_SPACING_M
-        v2 = self.velocity ** 2
         k0 = min(max(int(self.position // ds), 0), len(self.speed_limits) - 1)
         k1 = min(int((self.position + self.CURVE_HORIZON_M) // ds), len(self.speed_limits) - 1)
         best = None
+        best_v_allow2 = math.inf
         for k in range(k0, k1 + 1):
             limit = self.speed_limits[k]
             if limit >= self.CURVE_SPEED_CAP:
                 continue
             dist = max(k * ds - self.position, 0.0)
-            a_req = (v2 - limit ** 2) / (2.0 * max(dist, 1.0))
-            if best is None or a_req > best[2]:
-                best = (dist, limit, a_req)
-        return best
+            v_allow2 = limit ** 2 + 2.0 * self.max_brake_decel * dist
+            if v_allow2 < best_v_allow2:
+                best_v_allow2 = v_allow2
+                best = (dist, limit)
+        if best is None:
+            return None
+        dist, limit = best
+        a_req = (self.velocity ** 2 - limit ** 2) / (2.0 * max(dist, 1.0))
+        return dist, limit, a_req
 
     def _rider_frame_wind(self) -> tuple[float, float]:
         # Wind in the rider's frame (m/s): (headwind, crosswind from the right).
@@ -199,7 +208,7 @@ class BikeSimEnv:
 
         # The step covers [start, new_position] at new_velocity (position += v_new * dt), so that
         # speed must respect every limit on the way, not just the one where the step started.
-        if new_velocity > self._speed_limit_over(start_position, new_position):
+        if new_velocity > self._speed_limit_over(start_position, new_position) * self._grip_left_factor(brake_force, slope):
             # Crash before the corner: lose the speed (and the time to regain it) plus a fixed penalty.
             # Not terminal, so ending the episode early is never an escape from time penalties.
             self.crashes += 1
@@ -215,6 +224,18 @@ class BikeSimEnv:
         terminated = self.position >= self.total_distance
         self.finished = terminated
         return self._state(), reward, terminated, (not terminated) and self._truncated()
+
+    def _grip_left_factor(self, brake_force: float, slope: float) -> float:
+        # Friction circle: braking uses tyre grip the corner then can't have.
+        #   (v^2 / R)^2 + a_b^2 <= (mu g cos(theta))^2,  a_b = F_brake / m
+        # and v_max^4 = (mu g cos(theta) R)^2, so the cornering limit while braking shrinks to
+        #   v_max(F) = v_max * (1 - (a_b / (mu g cos(theta)))^2)^(1/4)
+        # Full brake (500 N, 80 kg) on the flat: factor 0.64. Grip uses plain mass (tyre load).
+        if brake_force <= 0.0:
+            return 1.0
+        grip = physics.FRICTION_COEFFICIENT * 9.81 * math.cos(math.atan(slope / 100))
+        used = brake_force / self.rider.mass / grip
+        return max(1.0 - used ** 2, 0.0) ** 0.25
 
     def _truncated(self) -> bool:
         return self.time_elapsed >= self.MAX_EPISODE_TIME

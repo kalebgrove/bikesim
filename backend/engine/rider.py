@@ -1,3 +1,6 @@
+RESTING_POWER_W_PER_KG = 1.2  # Resting metabolic rate ~1 kcal/kg/h = 1.16 W/kg, a bit more sitting upright
+
+
 class Rider:
     def __init__(self, rider_mass, bike_mass, ftp, f_max, cda, crr, inertia, wheel_radius, metabolic_efficiency):
         self.name = "Test Rider"
@@ -8,7 +11,8 @@ class Rider:
         self.crr = crr
         self.inertia = inertia
         self.wheel_radius = wheel_radius
-        self.metabolic_efficiency = metabolic_efficiency
+        self.metabolic_efficiency = metabolic_efficiency  # gross efficiency (resting metabolism included)
+        self.resting_power = RESTING_POWER_W_PER_KG * rider_mass  # W, metabolic floor when not pedalling
 
     @property
     def effective_mass(self) -> float:

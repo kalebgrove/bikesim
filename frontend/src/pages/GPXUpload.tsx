@@ -2,8 +2,9 @@ import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router";
 import { fetchRouteGeometry, uploadRoute } from "../lib/api";
 import { upsertRoute } from "../lib/store";
+import { Button, Callout, PageHeader, Panel } from "../components/ui";
 
-type UploadState = "idle" | "uploading" | "success" | "error";
+type UploadState = "idle" | "uploading" | "error";
 
 export default function GPXUpload() {
   const navigate = useNavigate();
@@ -52,83 +53,80 @@ export default function GPXUpload() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-10 space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold mb-1" style={{ fontFamily: "var(--font-sans)" }}>
-          Upload GPX Route
-        </h1>
-        <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
-          Upload a GPX track file. Elevation data (<code className="mono">ele</code> elements) is required for simulation.
-        </p>
-      </div>
+    <div className="max-w-3xl mx-auto px-6 py-6 space-y-6">
+      <PageHeader
+        eyebrow="Routes"
+        title="Import GPX route"
+        subtitle="The track is parsed, smoothed and resampled by the backend. Elevation data is required."
+      />
 
-      {/* Route name */}
-      <div className="space-y-1.5">
-        <label className="text-xs uppercase tracking-widest" style={{ color: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }}>
-          Route Name (optional)
-        </label>
-        <input
-          type="text"
-          value={routeName}
-          onChange={(e) => setRouteName(e.target.value)}
-          placeholder="e.g. Strade Bianche 2025"
-          className="w-full px-3 py-2 text-sm rounded border outline-none focus:ring-1"
-          style={{
-            background: "var(--secondary)",
-            border: "1px solid var(--border)",
-            color: "var(--foreground)",
-            fontFamily: "var(--font-body)",
-          }}
-        />
-      </div>
+      <Panel title="Source file">
+        <div className="space-y-5">
+          <div className="space-y-1.5">
+            <label htmlFor="routeName" className="label">
+              Route name <span className="normal-case tracking-normal text-faint">(optional)</span>
+            </label>
+            <input
+              id="routeName"
+              type="text"
+              value={routeName}
+              onChange={(e) => setRouteName(e.target.value)}
+              placeholder="Defaults to the file name"
+              className="w-full h-9 px-3 rounded-md bg-panel-2 border border-line text-fg placeholder:text-faint outline-none focus:border-accent"
+            />
+          </div>
 
-      {/* Drop zone */}
-      <div
-        onDrop={onDrop}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onClick={() => inputRef.current?.click()}
-        className="border-2 border-dashed rounded cursor-pointer transition-all flex flex-col items-center justify-center gap-3 py-14"
-        style={{
-          borderColor: dragOver ? "var(--primary)" : "var(--border)",
-          background: dragOver ? "rgba(56,189,248,0.04)" : "var(--card)",
-        }}
-      >
-        <input ref={inputRef} type="file" accept=".gpx,application/gpx+xml,text/xml" onChange={onFileChange} className="hidden" />
-        {state === "uploading" ? (
-          <>
-            <div className="size-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: "var(--primary)", borderTopColor: "transparent" }} />
-            <span className="text-sm" style={{ color: "var(--muted-foreground)" }}>
-              Uploading {fileName}…
-            </span>
-          </>
-        ) : (
-          <>
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={dragOver ? "var(--primary)" : "var(--muted-foreground)"} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
-            </svg>
-            <div className="text-center">
-              <p className="text-sm font-medium" style={{ color: "var(--foreground)" }}>
-                Drop .gpx file here or click to browse
-              </p>
-              <p className="text-xs mt-1" style={{ color: "var(--muted-foreground)" }}>
-                Track must include <code className="mono">trkpt</code> elements with elevation
-              </p>
+          <div
+            onDrop={onDrop}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onClick={() => state !== "uploading" && inputRef.current?.click()}
+            className={`rounded-lg border border-dashed cursor-pointer transition-colors flex flex-col items-center justify-center gap-3 py-14 ${
+              dragOver ? "border-accent bg-accent/5" : "border-line-strong bg-panel-2/40 hover:bg-panel-2"
+            }`}
+          >
+            <input ref={inputRef} type="file" accept=".gpx,application/gpx+xml,text/xml" onChange={onFileChange} className="hidden" />
+            {state === "uploading" ? (
+              <>
+                <div className="size-7 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+                <span className="text-dim">
+                  Processing <span className="num text-fg">{fileName}</span>…
+                </span>
+              </>
+            ) : (
+              <>
+                <div className={`size-10 rounded-lg grid place-items-center ${dragOver ? "bg-accent/15 text-accent" : "bg-panel-2 text-dim"}`}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v4h16v-4" />
+                  </svg>
+                </div>
+                <div className="text-center">
+                  <p className="font-medium text-fg">Drop a .gpx file here, or click to browse</p>
+                  <p className="text-xs text-faint mt-1">
+                    Track points (<code className="num">trkpt</code>) must include <code className="num">ele</code>
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
+
+          {state === "error" && (
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1">
+                <Callout tone="err" title="Import failed">
+                  {errorMsg}
+                </Callout>
+              </div>
+              <Button size="sm" onClick={() => setState("idle")}>
+                Dismiss
+              </Button>
             </div>
-          </>
-        )}
-      </div>
-
-      {state === "error" && (
-        <div className="border rounded px-4 py-3 text-sm" style={{ border: "1px solid #ef4444", background: "rgba(239,68,68,0.08)", color: "#ef4444" }}>
-          <strong>Upload failed:</strong> {errorMsg}
-          <button onClick={() => setState("idle")} className="ml-3 underline text-xs">
-            Try again
-          </button>
+          )}
         </div>
-      )}
+      </Panel>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "rl-agents"))
 from env import BikeSimEnv  # noqa: E402
+from backend.engine import physics  # noqa: E402
 
 ARC_RADIUS_M = 20.0  # v_max = sqrt(0.7 * 9.81 * 20) = 11.7 m/s on the flat
 
@@ -57,3 +58,48 @@ def test_brake_need_is_one_at_hardest_brake_action(rider, corner_route):
     env.position, env.velocity = 0.0, 16.0
     dist, limit, a_req = env._binding_curve_ahead()
     assert env._state()[11] == pytest.approx(min(max(a_req / env.max_brake_decel, -2.0), 2.0))
+
+
+def test_braking_in_a_corner_lowers_its_limit(rider, corner_route):
+    # Friction circle: at 90% of the cornering limit, coasting is fine but a 500 N brake
+    # (factor (1 - (6.25 / 6.87)^2)^(1/4) = 0.64) leaves too little grip -> crash.
+    env = BikeSimEnv(rider, corner_route, dt=0.1)
+    k_min = min(range(len(env.speed_limits)), key=env.speed_limits.__getitem__)
+    s, v = k_min * env.LIMIT_SPACING_M, 0.9 * env.speed_limits[k_min]
+
+    env.position, env.velocity = s, v
+    env.step(0)  # 0 W, no brake
+    assert env.crashes == 0
+
+    env.position, env.velocity = s, v
+    env.step(env.n_actions - 1)  # hardest brake
+    assert env.crashes == 1
+
+
+def test_binding_curve_is_the_nearby_limit_not_a_far_one(rider, straight_route):
+    # Regression: just under a limit 2 m ahead, with a looser curve 302 m ahead. Ranking by
+    # a_req picked the far one (a_req -0.09 vs -2.4 m/s^2, both "speed to spare"), so the agent
+    # never saw the limit it then crashed into. Lowest v_allow = sqrt(v_k^2 + 2 a_max d) must win.
+    env = BikeSimEnv(rider, straight_route(length_m=1000.0))
+    env.speed_limits = [physics.MAX_CORNERING_VELOCITY] * len(env.speed_limits)
+    env.speed_limits[20] = 10.0  # at 100 m
+    env.speed_limits[80] = 12.0  # at 400 m
+    env.position, env.velocity = 98.0, 9.5
+
+    dist, limit, a_req = env._binding_curve_ahead()
+    assert (dist, limit) == (pytest.approx(2.0), 10.0)
+    assert a_req == pytest.approx((9.5 ** 2 - 10.0 ** 2) / (2 * 2.0))
+
+
+def test_binding_curve_prefers_the_one_too_fast_to_brake_for(rider, straight_route):
+    # Too fast for a near curve: 15 m/s at 20 m (v_allow = sqrt(225 + 2 * 6.16 * 20) = 21.7 m/s)
+    # binds before 7 m/s at 300 m (v_allow = sqrt(49 + 2 * 6.16 * 300) = 61.2 m/s).
+    env = BikeSimEnv(rider, straight_route(length_m=1000.0))
+    env.speed_limits = [physics.MAX_CORNERING_VELOCITY] * len(env.speed_limits)
+    env.speed_limits[24] = 15.0  # at 120 m
+    env.speed_limits[80] = 7.0   # at 400 m
+    env.position, env.velocity = 100.0, 20.0
+
+    dist, limit, a_req = env._binding_curve_ahead()
+    assert (dist, limit) == (pytest.approx(20.0), 15.0)
+    assert a_req > 0  # needs braking now

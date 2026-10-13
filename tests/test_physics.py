@@ -165,3 +165,31 @@ def test_steep_climb_is_gravity_dominated(rider, straight_route):
     assert v == pytest.approx(steady_speed(rider, 300.0, 10.0), rel=0.01)
     gravity, _, drag = physics.resistive_components(rider, 10.0, v, RHO)
     assert gravity > 20 * drag
+
+
+# --- Air density, metabolism, friction circle ---------------------------------------------
+
+def test_air_density_follows_standard_atmosphere():
+    # ISA: 1.225 kg/m^3 at sea level, 1.112 at 1000 m, 1.007 at 2000 m
+    assert physics.air_density_at(RHO, 0.0) == RHO
+    assert physics.air_density_at(RHO, 1000.0) == pytest.approx(1.112, abs=0.001)
+    assert physics.air_density_at(RHO, 2000.0) == pytest.approx(1.007, abs=0.001)
+
+
+def test_metabolic_power_has_resting_floor(rider):
+    # Pedalling: P / eta_gross. Coasting: resting rate 1.2 W/kg * 70 kg = 84 W, not 0.
+    assert physics.metabolic_power(rider, 220.0) == pytest.approx(220.0 / 0.22)
+    assert physics.metabolic_power(rider, 0.0) == pytest.approx(84.0)
+
+
+def test_braking_envelope_brakes_less_hard_inside_corners(circle_route):
+    # On the 50 m arc, cornering uses grip, so speed can't drop at the full 4 m/s^2 there:
+    # v_k^2 - v_{k+1}^2 <= 2 * sqrt(grip^2 - (v^2/R)^2) * ds < 2 * 4 * ds wherever v^2/R > sqrt(grip^2 - 16)
+    route, radius = circle_route
+    ds = physics.ENVELOPE_SPACING_M
+    env = physics.braking_envelope(route)
+    grip = physics.FRICTION_COEFFICIENT * G
+    for k in range(3, len(env) - 4):  # well inside the arc
+        lateral = env[k] ** 2 / radius
+        a_left = math.sqrt(max(grip ** 2 - lateral ** 2, 0.0))
+        assert env[k] ** 2 - env[k + 1] ** 2 <= 2 * max(0.5, min(physics.MAX_BRAKE_DECEL, a_left)) * ds + 1e-6

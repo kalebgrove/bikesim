@@ -49,6 +49,7 @@ class SimulationSession:
         self.position_m = 0.0
         self.velocity = 0.0
         self.mechanical_joules = 0.0
+        self.metabolic_joules = 0.0
         self._stall_ticks = 0
         self._history: list[TelemetryPoint] = []
         self._lock = threading.Lock()
@@ -59,8 +60,7 @@ class SimulationSession:
 
     @property
     def kcal_burned(self) -> float:
-        metabolic_joules = self.mechanical_joules / max(1e-6, self.rider.metabolic_efficiency)
-        return metabolic_joules / 4184
+        return self.metabolic_joules / 4184
 
     def pause(self):
         with self._lock:
@@ -86,6 +86,7 @@ class SimulationSession:
             self.position_m = 0.0
             self.velocity = 0.0
             self.mechanical_joules = 0.0
+            self.metabolic_joules = 0.0
             self._stall_ticks = 0
             self._history.clear()
 
@@ -104,8 +105,10 @@ class SimulationSession:
         apparent_wind_speed, yaw_angle = wind.apparent_wind(bike_velocity_vector, wind_vector, heading)
         v_rel = wind.longitudinal_airspeed(heading, self.velocity, wind_vector)
 
+        # env.airDensity is sea-level density; correct it for the elevation here
+        rho = physics.air_density_at(env.airDensity, self.route.position_at(pos_clamped)[2])
         grav_force, rolling_force, aero_force = physics.resistive_components(
-            self.rider, slope_pct, v_rel, env.airDensity
+            self.rider, slope_pct, v_rel, rho
         )
         resistive = grav_force + rolling_force + aero_force
 
@@ -125,6 +128,7 @@ class SimulationSession:
         self.position_m += v_new * h
         self.velocity = v_new
         self.mechanical_joules += realized_power * h
+        self.metabolic_joules += physics.metabolic_power(self.rider, realized_power) * h
 
         _, _, elevation = self.route.position_at(min(self.position_m, self.total_distance_m))
 

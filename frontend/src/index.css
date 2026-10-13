@@ -1,53 +1,33 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
 @import "tailwindcss";
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-border: var(--border);
-  --color-ring: var(--ring);
-  --radius-sm: calc(var(--radius) - 1px);
-  --radius-md: var(--radius);
-  --radius-lg: calc(var(--radius) + 2px);
-  --font-sans: "DM Sans", "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", monospace;
-  --font-body: "Inter", system-ui, sans-serif;
-}
+/* Design tokens — used as Tailwind utilities, e.g. bg-panel, text-dim, border-line */
+@theme {
+  --color-bg: #0b0d12;
+  --color-panel: #12151c;
+  --color-panel-2: #181c25;
+  --color-line: #242a35;
+  --color-line-strong: #333a48;
+  --color-fg: #e7eaf0;
+  --color-dim: #9aa3b2;
+  --color-faint: #636c7c;
+  --color-accent: #5b9dff;
+  --color-accent-strong: #3d84f5;
+  --color-ok: #34d399;
+  --color-warn: #fbbf24;
+  --color-err: #f87171;
 
-:root {
-  --background: #07090d;
-  --foreground: #dce6f4;
-  --card: #0c1018;
-  --card-foreground: #c8d6e8;
-  --primary: #38bdf8;
-  --primary-foreground: #03202d;
-  --secondary: #121824;
-  --secondary-foreground: #8fa5bf;
-  --muted: #0f1520;
-  --muted-foreground: #526278;
-  --accent: #f59e0b;
-  --accent-foreground: #1c1407;
-  --border: #1a2638;
-  --ring: #38bdf8;
-  --radius: 3px;
-  --color-success: #22c55e;
-  --color-danger: #ef4444;
-  --color-warning: #f59e0b;
-}
+  /* Data series */
+  --color-power: #f59e0b;
+  --color-speed: #34d399;
+  --color-elev: #94a3b8;
+  --color-grav: #a78bfa;
+  --color-aero: #5b9dff;
+  --color-roll: #f472b6;
 
-* {
-  box-sizing: border-box;
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
 html,
@@ -55,42 +35,60 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  padding: 0;
 }
 
 body {
-  background-color: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-body);
-  font-size: 14px;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  color-scheme: dark;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 2px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--muted-foreground);
-}
-
-/* Mono data values */
-.mono {
+/* Numeric readouts */
+.num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 
-/* Focus ring */
+/* Small uppercase labels */
+.label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-line-strong);
+}
+
 :focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Hide number spinners — units are shown as suffixes instead */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+input[type="range"] {
+  accent-color: var(--color-accent);
 }
