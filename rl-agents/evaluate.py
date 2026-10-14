@@ -32,9 +32,11 @@ def main():
     parser.add_argument("--route", default=os.path.join(ROOT, "backend", "data", "stage-1-route.gpx"), help="Path to a GPX route file.")
     parser.add_argument("--dt", type=float, default=0.5, help="Physics timestep in seconds; use the one the checkpoints were trained with.")
     parser.add_argument("--checkpoint-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkpoints"), help="Directory with .pt checkpoints.")
+    parser.add_argument("--checkpoint", default=None, help="Evaluate only this .pt file (e.g. rl-agents/checkpoints/best.pt).")
+    parser.add_argument("--crashes", action="store_true", help="Print details of every crash in each greedy ride.")
     args = parser.parse_args()
 
-    paths = checkpoint_paths(args.checkpoint_dir)
+    paths = [args.checkpoint] if args.checkpoint else checkpoint_paths(args.checkpoint_dir)
     if not paths:
         print(f"No checkpoints found in {args.checkpoint_dir}")
         return
@@ -64,6 +66,24 @@ def main():
         print(
             f"{os.path.basename(path):<18} {ride:>10} {delta:>8} {metrics['crashes']:>8} "
             f"{avg_power:>6.0f} {metrics['max_speed'] * 3.6:>9.1f}",
+            flush=True,
+        )
+        if args.crashes:
+            print_crashes(env.crash_log)
+
+
+def print_crashes(crash_log: list[dict]):
+    # Speeds in km/h for readability; overshoot > a few km/h = the agent didn't brake in time,
+    # < ~2 km/h = it cut the corner fine and misjudged slightly.
+    if not crash_log:
+        return
+    print(f"    {'pos m':>7} {'t s':>6} {'grade%':>7} {'v km/h':>7} {'limit':>6} {'grip':>5} {'over':>5}  {'action':<7} brake need (last ~2 s)")
+    for c in crash_log:
+        action = f"B {c['brake_n']:.0f}N" if c["brake_n"] > 0 else f"P {c['power_w']:.0f}W"
+        need = " ".join(f"{b:+.2f}" for b in c["brake_need"][-6:])
+        print(
+            f"    {c['position_m']:>7.0f} {c['time_s']:>6.0f} {c['grade_pct']:>7.1f} {c['v_new'] * 3.6:>7.1f} "
+            f"{c['limit'] * 3.6:>6.1f} {c['grip_factor']:>5.2f} {c['overshoot'] * 3.6:>5.1f}  {action:<7} {need}",
             flush=True,
         )
 

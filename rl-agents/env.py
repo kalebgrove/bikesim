@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import math
+from collections import deque
 from backend.engine import physics
 from backend.engine import wind as wind_module
 import backend.engine.rider as rider_module
@@ -22,9 +23,11 @@ class BikeSimEnv:
     TIME_PENALTY = 1.0      # reward per second elapsed (negative)
     PROGRESS_REWARD = 0.1   # reward per metre covered (shaping; sums to a constant at the finish)
     CRASH_PENALTY = 200.0   # on top of the time lost re-accelerating from 0; at 50 the agent accepted ~15 crashes/ride instead of braking
+    OVERSPEED_PENALTY = 20.0  # per m/s above the braking envelope, per step: the warning comes while braking can still help, not only at the crash
     LIMIT_SPACING_M = physics.ENVELOPE_SPACING_M  # speed-limit grid, shared by observation and crash check
     CURVE_HORIZON_M = 500.0
     CURVE_SPEED_CAP = 30.0  # m/s; grid points with a higher limit don't count as curves
+    ENVELOPE_MARGIN = 0.97  # braking envelope aims at 97 % of each cornering limit: leaves ~1/3 of grip to brake in the bend
 
     def __init__(self, rider: rider_module.Rider, route: route_module.Route, wind_velocity_vector: tuple[float, float] = (0.0, 0.0), dt: float | None = None):
         self.rider = rider
@@ -58,6 +61,39 @@ class BikeSimEnv:
             s = min(k * ds, self.total_distance)
             slope, *_ = self.route.slope_at(s)
             self.speed_limits.append(physics.max_cornering_velocity(self.route, s, slope))
+        self._compute_braking_envelope()
+
+    def _compute_braking_envelope(self):
+        # envelope[k]: fastest the rider may pass grid point k and still, braking as hard as the
+        # tyres allow, stay under every cell limit ahead (m/s). Backward pass like
+        # physics.braking_envelope, but with this env's rules:
+        #   - point k ends cell k-1 and starts cell k, each limited by the lower of its two ends,
+        #     times ENVELOPE_MARGIN (at exactly the limit no grip is left to brake against gravity);
+        #   - brake force = strongest action (500 N), cut by the friction circle in a bend:
+        #       F <= mu m g cos(theta) sqrt(1 - (v / v_cell)^4)   (same rule as _grip_left_factor),
+        #     kept 20 % inside the edge (room for the 50 N brake steps); braking in a bend near its limit is barely possible;
+        #   - a = (F + m g sin(theta) + rolling) / m_eff: a descent eats into braking (drag ignored,
+        #     it only helps), so on a steep descent the bend can force the speed down earlier.
+        #   v_k = min(v_cap, sqrt(v_{k+1}^2 + 2 a ds)), with a evaluated at v_k (a few fixed-point
+        #   iterations: less speed in the bend leaves more grip for braking).
+        ds = self.LIMIT_SPACING_M
+        limits = self.speed_limits
+        n = len(limits)
+        m, m_eff = self.rider.mass, self.rider.effective_mass
+        f_max = max(self.BRAKE_SPACE)
+        self.envelope = [0.0] * n
+        v_next = physics.MAX_CORNERING_VELOCITY
+        for k in reversed(range(n)):
+            cell = min(limits[k], limits[min(k + 1, n - 1)])
+            v_cap = self.ENVELOPE_MARGIN * min(cell, limits[max(k - 1, 0)])
+            theta = math.atan(self._slope_at(k * ds) / 100)
+            grip_n = physics.FRICTION_COEFFICIENT * 9.81 * math.cos(theta) * m
+            resist = m * 9.81 * (math.sin(theta) + self.rider.crr * math.cos(theta))
+            v = v_cap
+            for _ in range(4):
+                f = min(f_max, 0.8 * grip_n * math.sqrt(max(1.0 - (v / cell) ** 4, 0.0)))
+                v = min(v_cap, math.sqrt(max(v_next ** 2 + 2.0 * (f + resist) / m_eff * ds, 0.0)))
+            self.envelope[k] = v_next = v
 
     def _speed_limit_over(self, s0: float, s1: float) -> float:
         # Lowest limit over every grid cell the stretch [s0, s1] touches (limit inside a cell =
@@ -75,27 +111,53 @@ class BikeSimEnv:
         # negative and dividing by a large d pulls far curves toward 0, so a limit 0.3 m/s above
         # the rider in its own cell lost to a curve 350 m away and the agent rode into it.
         # Starts at the cell the rider is in, so the current limit is always a candidate.
-        # Returns (distance_m, limit_mps, a_req_mps2) with a_req for that curve (d floored at
-        # 1 m), or None if no curve is in range.
+        # Measured the way the crash check sees limits: cell k spans [k ds, (k+1) ds] with limit
+        # min(L_k, L_k+1), so a limit binds from the START of the cell before its grid point.
+        # Braking deceleration counts the resistance on the current grade (less on descents).
+        # Distance in v_allow is d_eff = d - v dt: "can I still make it after one more step?"
+        # At 16.5 m/s a 6.8 m/s corner 25 m ahead is brakeable now (v_allow 18 m/s) but not after
+        # the next 8 m, so ranking on d hid it until it was too late. All limits within one step
+        # get d_eff = 0, so the lowest of them binds.
+        # Returns (distance_m, limit_mps) for that curve, or None if no curve is in range.
         ds = self.LIMIT_SPACING_M
-        k0 = min(max(int(self.position // ds), 0), len(self.speed_limits) - 1)
-        k1 = min(int((self.position + self.CURVE_HORIZON_M) // ds), len(self.speed_limits) - 1)
+        last = len(self.speed_limits) - 2
+        k0 = min(max(int(self.position // ds), 0), last)
+        k1 = min(int((self.position + self.CURVE_HORIZON_M) // ds), last)
+        a_max = max((max(self.BRAKE_SPACE) + self._resistive_force()) / self.rider.effective_mass, 0.5)
+        lead = self.velocity * self.DT
         best = None
         best_v_allow2 = math.inf
         for k in range(k0, k1 + 1):
-            limit = self.speed_limits[k]
+            limit = min(self.speed_limits[k], self.speed_limits[k + 1])
             if limit >= self.CURVE_SPEED_CAP:
                 continue
             dist = max(k * ds - self.position, 0.0)
-            v_allow2 = limit ** 2 + 2.0 * self.max_brake_decel * dist
+            v_allow2 = limit ** 2 + 2.0 * a_max * max(dist - lead, 0.0)
             if v_allow2 < best_v_allow2:
                 best_v_allow2 = v_allow2
                 best = (dist, limit)
-        if best is None:
-            return None
-        dist, limit = best
-        a_req = (self.velocity ** 2 - limit ** 2) / (2.0 * max(dist, 1.0))
-        return dist, limit, a_req
+        return best
+
+    def _envelope_over_step(self) -> float:
+        # Lowest envelope speed wherever this step can end, [s, s + (v + 2 m/s) dt] (m/s). The crash
+        # check holds the END speed to the cell the step ends in, and pedalling carries the rider a
+        # bit further than v dt, where the envelope can already have dropped into a corner cell.
+        ds = self.LIMIT_SPACING_M
+        s0 = self.position
+        s1 = s0 + (self.velocity + 2.0) * self.DT
+        v_min = min(physics.envelope_speed_at(self.envelope, s0, ds), physics.envelope_speed_at(self.envelope, s1, ds))
+        last = len(self.envelope) - 1
+        for k in range(min(int(s0 // ds) + 1, last), min(int(s1 // ds), last) + 1):
+            v_min = min(v_min, self.envelope[k])
+        return v_min
+
+    def _resistive_force(self) -> float:
+        # Gravity + rolling + drag at the current state (N), as physics.step computes it; > 0 slows.
+        position = min(self.position, self.total_distance)
+        slope = self._slope_at(position)
+        v_rel = wind_module.longitudinal_airspeed(self.route.heading_at(position), self.velocity, self.wind_velocity_vector)
+        rho = physics.air_density_at(self.AIR_DENSITY, self.route.position_at(position)[2])
+        return physics.resistive_force(self.rider, slope, v_rel, rho)
 
     def _rider_frame_wind(self) -> tuple[float, float]:
         # Wind in the rider's frame (m/s): (headwind, crosswind from the right).
@@ -113,16 +175,23 @@ class BikeSimEnv:
 
         upcoming = self._binding_curve_ahead()
         if upcoming is not None:
-            dist_to_curve, curve_max_speed, a_req = upcoming
-            # Deceleration needed to reach the curve at its limit: a_req = (v^2 - v_c^2) / (2 d), m/s^2.
-            # Scaled so 1.0 = the agent's hardest brake action (max_brake_decel); negative = speed to spare.
-            brake_need = min(max(a_req / self.max_brake_decel, -2.0), 2.0)
+            dist_to_curve, curve_max_speed = upcoming
             dist_to_curve = min(dist_to_curve, self.CURVE_HORIZON_M) / self.CURVE_HORIZON_M
             curve_max_speed = curve_max_speed / 30.0
         else:
             dist_to_curve = 1.0
             curve_max_speed = 1.0
-            brake_need = 0.0
+
+        # Brake force needed THIS step to end it on the braking envelope, after resistance does its part:
+        #   a = (v - v_env) / dt,  F_req = m_eff a - F_resist  (N),  brake_need = F_req / 500 N
+        # 1.0 = the hardest brake action, 0 = coasting is exactly enough (on a descent that needs
+        # braking even to hold speed), negative = room to pedal. Clipped to +/-2.
+        # The envelope includes the friction circle, so braking early enough is visible here: a
+        # single "binding curve + full brake" number hid that a bend leaves little grip to brake.
+        v_env = self._envelope_over_step()
+        f_req = self.rider.effective_mass * (self.velocity - v_env) / self.DT - self._resistive_force()
+        brake_need = min(max(f_req / max(self.BRAKE_SPACE), -2.0), 2.0)
+        self._recent_brake_need.append(brake_need)  # diagnostics only (crash_log)
 
         slope_ahead_50 = self._slope_at(self.position + 50.0)
         slope_ahead_100 = self._slope_at(self.position + 100.0)
@@ -155,6 +224,8 @@ class BikeSimEnv:
         self.velocity = 0.0
         self.time_elapsed = 0.0
         self.crashes = 0
+        self.crash_log = []  # one dict per crash, for diagnosing *why* the agent crashes
+        self._recent_brake_need = deque(maxlen=max(1, round(2.0 / self.DT)))  # last ~2 s of observed brake need
         self.finished = False
         self.mechanical_joules = 0.0
         self.w_prime_balance = self.W_PRIME
@@ -176,6 +247,31 @@ class BikeSimEnv:
             self.w_prime_balance += (cp - power) * (self.W_PRIME - self.w_prime_balance) / self.W_PRIME * self.DT
         self.w_prime_balance = min(max(self.w_prime_balance, 0.0), self.W_PRIME)
 
+    def _simulate(self, position: float, velocity: float, p_target: float, brake_force: float):
+        # One physics step from (position, velocity) without touching env state.
+        # Returns (new_position, new_velocity, p_realized, crashed).
+        slope = self._slope_at(position)
+        heading = self.route.heading_at(position)
+        v_rel = wind_module.longitudinal_airspeed(heading, velocity, self.wind_velocity_vector)
+
+        # No v_limit: the agent must brake for corners itself or crash
+        new_position, new_velocity, p_realized = physics.step(
+            rider=self.rider,
+            route=self.route,
+            position=position,
+            velocity=velocity,
+            slope=slope,
+            v_rel=v_rel,
+            p_target=p_target,
+            dt=self.DT,
+            air_density=self.AIR_DENSITY,
+            break_force=brake_force,
+        )
+        # The step covers [start, new_position] at new_velocity (position += v_new * dt), so that
+        # speed must respect every limit on the way, not just the one where the step started.
+        limit = self._speed_limit_over(position, new_position) * self._grip_left_factor(brake_force, slope)
+        return new_position, new_velocity, p_realized, new_velocity > limit
+
     def step(self, action: int):
         """Returns (state, reward, terminated, truncated)."""
         p_target, brake_force = self.action_index_to_values(action)
@@ -185,33 +281,31 @@ class BikeSimEnv:
         slope = self._slope_at(self.position)
         start_position = self.position
 
-        heading = self.route.heading_at(self.position)
-        v_rel = wind_module.longitudinal_airspeed(heading, self.velocity, self.wind_velocity_vector)
-
-        # No v_limit: the agent must brake for corners itself or crash
-        new_position, new_velocity, p_realized = physics.step(
-            rider=self.rider,
-            route=self.route,
-            position=self.position,
-            velocity=self.velocity,
-            slope=slope,
-            v_rel=v_rel,
-            p_target=p_target,
-            dt=self.DT,
-            air_density=self.AIR_DENSITY,
-            break_force=brake_force,
-        )
+        new_position, new_velocity, p_realized, crashed = self._simulate(self.position, self.velocity, p_target, brake_force)
 
         self.time_elapsed += self.DT
         self.mechanical_joules += p_realized * self.DT
         self._update_w_prime(p_realized)
 
-        # The step covers [start, new_position] at new_velocity (position += v_new * dt), so that
-        # speed must respect every limit on the way, not just the one where the step started.
-        if new_velocity > self._speed_limit_over(start_position, new_position) * self._grip_left_factor(brake_force, slope):
+        if crashed:
+            limit = self._speed_limit_over(start_position, new_position)
+            grip_factor = self._grip_left_factor(brake_force, slope)
             # Crash before the corner: lose the speed (and the time to regain it) plus a fixed penalty.
             # Not terminal, so ending the episode early is never an escape from time penalties.
             self.crashes += 1
+            self.crash_log.append({
+                "position_m": start_position,
+                "time_s": self.time_elapsed,
+                "grade_pct": slope,
+                "v_before": self.velocity,             # m/s, at the start of the step
+                "v_new": new_velocity,                 # m/s, speed that broke the limit
+                "limit": limit,                        # m/s, cornering limit without braking
+                "grip_factor": grip_factor,            # < 1 when braking used up grip
+                "overshoot": new_velocity - limit * grip_factor,  # m/s over the effective limit
+                "power_w": p_target,
+                "brake_n": brake_force,
+                "brake_need": list(self._recent_brake_need),  # oldest -> newest, ~2 s before the crash
+            })
             self.velocity = 0.0
             return self._state(), -self.CRASH_PENALTY - self.TIME_PENALTY * self.DT, False, self._truncated()
 
@@ -220,6 +314,11 @@ class BikeSimEnv:
         # Minimise finishing time. Progress reward is shaping: it sums to the same
         # constant for every finished ride, so only the time term ranks policies.
         reward = self.PROGRESS_REWARD * (min(self.position, self.total_distance) - start_position) - self.TIME_PENALTY * self.DT
+        # Above the braking envelope = braked too late for a curve ahead, even if the crash is still
+        # a few steps away. Penalising it here gives a signal before the crash; a rider who brakes
+        # in time (ends each step at or below the envelope) never pays it.
+        overspeed = self.velocity - physics.envelope_speed_at(self.envelope, min(self.position, self.total_distance), self.LIMIT_SPACING_M)
+        reward -= self.OVERSPEED_PENALTY * max(overspeed, 0.0)
 
         terminated = self.position >= self.total_distance
         self.finished = terminated

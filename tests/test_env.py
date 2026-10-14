@@ -51,13 +51,40 @@ def test_no_crash_on_straight(rider, straight_route):
     assert env.position > 100.0
 
 
-def test_brake_need_is_one_at_hardest_brake_action(rider, corner_route):
-    # brake_need = a_req / (500 N / m_eff); 1.0 means the strongest brake action is just enough
+def test_brake_need_is_force_to_end_step_on_envelope(rider, corner_route):
+    # brake_need = (m_eff (v - v_env) / dt - F_resist) / 500 N: 1.0 = the hardest brake action
     env = BikeSimEnv(rider, corner_route)
-    assert env.max_brake_decel == pytest.approx(500.0 / rider.effective_mass)
-    env.position, env.velocity = 0.0, 16.0
-    dist, limit, a_req = env._binding_curve_ahead()
-    assert env._state()[11] == pytest.approx(min(max(a_req / env.max_brake_decel, -2.0), 2.0))
+    env.position, env.velocity = 250.0, 16.0
+    f_req = rider.effective_mass * (16.0 - env._envelope_over_step()) / env.DT - env._resistive_force()
+    assert env._state()[11] == pytest.approx(min(max(f_req / 500.0, -2.0), 2.0))
+
+
+def test_envelope_respects_every_cell_limit(rider, corner_route):
+    # The envelope never asks for more than ENVELOPE_MARGIN of the limit of either cell a point touches
+    env = BikeSimEnv(rider, corner_route)
+    L = env.speed_limits
+    for k in range(1, len(L) - 1):
+        assert env.envelope[k] <= env.ENVELOPE_MARGIN * min(L[k - 1], L[k], L[k + 1]) + 1e-9
+
+
+def test_riding_the_envelope_never_crashes(rider, corner_route):
+    # Brake with brake_need x 500 N (next 50 N step up), coast near 0, else pedal 1000 W: with
+    # only the observation, this rides the corner route crash-free and never pays overspeed.
+    env = BikeSimEnv(rider, corner_route, dt=0.5)
+    s = env.reset()
+    overspeed_paid = 0.0
+    while not env.finished:
+        need = s[11]
+        if need > 0:
+            a = env.n_power + min(math.ceil(need * 10) - 1, 9)
+        else:
+            a = 0 if need > -0.3 else env.n_power - 1
+        start = env.position
+        s, r, *_ = env.step(a)
+        expected = env.PROGRESS_REWARD * (min(env.position, env.total_distance) - start) - env.TIME_PENALTY * env.DT
+        overspeed_paid += expected - r
+    assert env.crashes == 0
+    assert overspeed_paid == pytest.approx(0.0, abs=1.0)
 
 
 def test_braking_in_a_corner_lowers_its_limit(rider, corner_route):
@@ -80,26 +107,27 @@ def test_binding_curve_is_the_nearby_limit_not_a_far_one(rider, straight_route):
     # Regression: just under a limit 2 m ahead, with a looser curve 302 m ahead. Ranking by
     # a_req picked the far one (a_req -0.09 vs -2.4 m/s^2, both "speed to spare"), so the agent
     # never saw the limit it then crashed into. Lowest v_allow = sqrt(v_k^2 + 2 a_max d) must win.
+    # The limit at 100 m binds the whole cell [95, 100] (crash check: lower of a cell's two ends),
+    # and the rider at 98 m is already inside it -> distance 0.
     env = BikeSimEnv(rider, straight_route(length_m=1000.0))
     env.speed_limits = [physics.MAX_CORNERING_VELOCITY] * len(env.speed_limits)
     env.speed_limits[20] = 10.0  # at 100 m
     env.speed_limits[80] = 12.0  # at 400 m
     env.position, env.velocity = 98.0, 9.5
 
-    dist, limit, a_req = env._binding_curve_ahead()
-    assert (dist, limit) == (pytest.approx(2.0), 10.0)
-    assert a_req == pytest.approx((9.5 ** 2 - 10.0 ** 2) / (2 * 2.0))
+    dist, limit = env._binding_curve_ahead()
+    assert (dist, limit) == (0.0, 10.0)
 
 
 def test_binding_curve_prefers_the_one_too_fast_to_brake_for(rider, straight_route):
-    # Too fast for a near curve: 15 m/s at 20 m (v_allow = sqrt(225 + 2 * 6.16 * 20) = 21.7 m/s)
-    # binds before 7 m/s at 300 m (v_allow = sqrt(49 + 2 * 6.16 * 300) = 61.2 m/s).
+    # Too fast for a near curve: 15 m/s from 115 m (cell [115, 120], 15 m ahead) binds before
+    # 7 m/s at 400 m. Ranked on d - v dt ("still brakeable after this step?"), reported as d.
     env = BikeSimEnv(rider, straight_route(length_m=1000.0))
     env.speed_limits = [physics.MAX_CORNERING_VELOCITY] * len(env.speed_limits)
     env.speed_limits[24] = 15.0  # at 120 m
     env.speed_limits[80] = 7.0   # at 400 m
     env.position, env.velocity = 100.0, 20.0
 
-    dist, limit, a_req = env._binding_curve_ahead()
-    assert (dist, limit) == (pytest.approx(20.0), 15.0)
-    assert a_req > 0  # needs braking now
+    dist, limit = env._binding_curve_ahead()
+    assert (dist, limit) == (pytest.approx(15.0), 15.0)
+
