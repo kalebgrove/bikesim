@@ -34,7 +34,10 @@ INFEASIBLE = 1e9  # s; finite stand-in for "can't do this", keeps interpolation 
 class Course:
     """Route quantities on the braking-envelope grid, so riding a segment is table lookups."""
 
-    def __init__(self, route: Route, wind_velocity_vector: tuple[float, float], sea_level_density: float):
+    def __init__(self, route: Route, wind_velocity_vector: tuple[float, float], sea_level_density: float,
+                 envelope: list[float] | None = None):
+        # envelope: speed cap per ENVELOPE_SPACING_M grid point (m/s); default physics.braking_envelope.
+        # Pass the RL env's envelope (env.envelope) to solve under the agent's braking rules.
         self.ds = physics.ENVELOPE_SPACING_M
         self.total = route.total_distance()
         self.wind = wind_velocity_vector
@@ -43,7 +46,7 @@ class Course:
         self.slope = [route.slope_at(s)[0] for s in points]
         self.heading = [route.heading_at(s) for s in points]
         self.rho = [physics.air_density_at(sea_level_density, route.position_at(s)[2]) for s in points]
-        self.envelope = physics.braking_envelope(route)
+        self.envelope = envelope if envelope is not None else physics.braking_envelope(route)
 
 
 @dataclass
@@ -105,6 +108,21 @@ def _interp(table: np.ndarray, v: np.ndarray, w: np.ndarray) -> np.ndarray:
     j, tw = locate(w, W_GRID)
     return ((1 - tv) * (1 - tw) * table[i, j] + tv * (1 - tw) * table[i + 1, j]
             + (1 - tv) * tw * table[i, j + 1] + tv * tw * table[i + 1, j + 1])
+
+
+def value_at(V: list[np.ndarray], s: float, v: float, w: float, behind_best: bool = False) -> float:
+    """Minimum time to the finish (s) from position s (m), speed v (m/s), W' balance w (J).
+    behind_best: subtract the best (v, w) at that boundary, V_k(v, w) - min V_k = seconds lost
+    to the best state there. V lives on the segment boundaries; between them, interpolate
+    linearly in position."""
+    f = min(max(s / SEGMENT_M, 0.0), len(V) - 1.0)
+    k = min(int(f), len(V) - 2)
+    t = f - k
+    vw = (np.array(v), np.array(w))
+    here, nxt = float(_interp(V[k], *vw)), float(_interp(V[k + 1], *vw))
+    if behind_best:
+        here, nxt = here - float(V[k].min()), nxt - float(V[k + 1].min())
+    return (1.0 - t) * here + t * nxt
 
 
 def _boundaries(course: Course) -> list[float]:

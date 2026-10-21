@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import math
 from collections import deque
-from backend.engine import physics
+from backend.engine import optimizer, physics
 from backend.engine import wind as wind_module
 import backend.engine.rider as rider_module
 import backend.engine.route as route_module
@@ -23,13 +23,32 @@ class BikeSimEnv:
     TIME_PENALTY = 1.0      # reward per second elapsed (negative)
     PROGRESS_REWARD = 0.1   # reward per metre covered (shaping; sums to a constant at the finish)
     CRASH_PENALTY = 200.0   # on top of the time lost re-accelerating from 0; at 50 the agent accepted ~15 crashes/ride instead of braking
+    # Reward per joule of W' gained (+) or spent (-), on the TIME_PENALTY scale. The DP value
+    # function puts 1 kJ of W' at ~1-3 s of ride time on stage-1 (more on the climbs), so 2 s/kJ.
+    # The agent then spends W' only where it buys more than 2 s/kJ: climbs (~3 s/kJ at 8 %),
+    # not fast descents (~0.7 s/kJ at -4 %, drag ~ v^2), where riding below CP refills it instead.
+    W_PRIME_VALUE = 2.0e-3 * TIME_PENALTY
     OVERSPEED_PENALTY = 20.0  # per m/s above the braking envelope, per step: the warning comes while braking can still help, not only at the crash
     LIMIT_SPACING_M = physics.ENVELOPE_SPACING_M  # speed-limit grid, shared by observation and crash check
     CURVE_HORIZON_M = 500.0
     CURVE_SPEED_CAP = 30.0  # m/s; grid points with a higher limit don't count as curves
+    CLIMB_HORIZON_M = 1000.0  # climbing-ahead observation: ascent over this far ahead
+    CLIMB_SCALE_M = 50.0      # ascent normalisation (stage-1: up to ~37 m in any 1 km)
     ENVELOPE_MARGIN = 0.97  # braking envelope aims at 97 % of each cornering limit: leaves ~1/3 of grip to brake in the bend
 
-    def __init__(self, rider: rider_module.Rider, route: route_module.Route, wind_velocity_vector: tuple[float, float] = (0.0, 0.0), dt: float | None = None):
+    def __init__(self, rider: rider_module.Rider, route: route_module.Route, wind_velocity_vector: tuple[float, float] = (0.0, 0.0), dt: float | None = None,
+                 value_function: list | None = None, gamma: float = 0.99):
+        # value_function: DP time-to-go tables (optimizer.solve, under this env's envelope). Given,
+        # the reward is shaped with a potential instead of the flat W' price:
+        #   r' = r + gamma Phi(s') - Phi(s),   Phi = -(V(s, v, W') - min_{v,W'} V(s, ., .)),   Phi(terminal) = 0
+        # Phi = seconds behind the best state at this point of the route. Not Phi = -V: that makes
+        # Q' = Q + V_DP (0..1000 s) and adds ~0.01 V per step, burying the ~0.1 s action gaps;
+        # the run-dpshape agent then braked at a standstill (+9.7/step vs +10.2 for riding).
+        # Potential-based shaping leaves the optimal policy unchanged (Ng et al. 1999) when gamma is
+        # the agent's discount, and it prices W' (and speed) by what they're worth HERE: ~3 s/kJ
+        # before a steep climb, far less before a descent, where the flat 2 s/kJ got both wrong.
+        self.value_function = value_function
+        self.gamma = gamma
         self.rider = rider
         self.route = route
         self.wind_velocity_vector = wind_velocity_vector
@@ -41,12 +60,13 @@ class BikeSimEnv:
 
         self.total_distance = route.total_distance()
         self._precompute_speed_limits()
+        self._precompute_ascent()
 
         self.n_power = len(self.POWER_SPACE)
         self.n_brake = len(self.BRAKE_SPACE)
         self.n_actions = self.n_power + self.n_brake
 
-        self.n_state = 12
+        self.n_state = 13
 
         self.reset()
 
@@ -62,6 +82,31 @@ class BikeSimEnv:
             slope, *_ = self.route.slope_at(s)
             self.speed_limits.append(physics.max_cornering_velocity(self.route, s, slope))
         self._compute_braking_envelope()
+
+    def _precompute_ascent(self):
+        # Cumulative climbing (m) up to each grid point, from the route's smoothed elevation; only
+        # rises count. Ascent over [s, s + h] = cum[k(s + h)] - cum[k(s)].
+        ds = self.LIMIT_SPACING_M
+        n = int(self.total_distance // ds) + 2
+        ele = [self.route.position_at(min(k * ds, self.total_distance))[2] for k in range(n)]
+        self.cum_ascent = [0.0]
+        for k in range(1, n):
+            self.cum_ascent.append(self.cum_ascent[-1] + max(ele[k] - ele[k - 1], 0.0))
+
+    def _ascent_ahead(self) -> float:
+        # Metres of climbing in the next CLIMB_HORIZON_M. The grade look-ahead stops at 200 m, so
+        # without this the agent couldn't save W' for a climb it can't see yet (it reached the
+        # 11 % ramp at 6.3 km with W' = 0 after spending it on the flat before).
+        ds, last = self.LIMIT_SPACING_M, len(self.cum_ascent) - 1
+        k0 = min(int(self.position // ds), last)
+        k1 = min(int((self.position + self.CLIMB_HORIZON_M) // ds), last)
+        return self.cum_ascent[k1] - self.cum_ascent[k0]
+
+    def _potential(self, terminal: bool = False) -> float:
+        # Phi = -(seconds the current (speed, W') loses to the best state at this position, by the DP); 0 at the finish.
+        if terminal:
+            return 0.0
+        return -optimizer.value_at(self.value_function, self.position, self.velocity, self.w_prime_balance, behind_best=True)
 
     def _compute_braking_envelope(self):
         # envelope[k]: fastest the rider may pass grid point k and still, braking as hard as the
@@ -212,6 +257,7 @@ class BikeSimEnv:
             slope_ahead_200 / 30.0,
             self.w_prime_balance / self.W_PRIME,
             brake_need,
+            self._ascent_ahead() / self.CLIMB_SCALE_M,
         ]
 
     def _slope_at(self, position):
@@ -280,12 +326,20 @@ class BikeSimEnv:
 
         slope = self._slope_at(self.position)
         start_position = self.position
+        shaping = self.value_function is not None
+        phi_before = self._potential() if shaping else 0.0
 
         new_position, new_velocity, p_realized, crashed = self._simulate(self.position, self.velocity, p_target, brake_force)
 
         self.time_elapsed += self.DT
         self.mechanical_joules += p_realized * self.DT
+        w_before = self.w_prime_balance
         self._update_w_prime(p_realized)
+        # Price W' at what it's worth in ride time: refilling earns, spending costs, both NOW.
+        # Recharging on a descent only pays off on a climb minutes later, far beyond the agent's
+        # gamma = 0.99 horizon (~50 s), so it burned W' in the first 2 min and never refilled it.
+        # With DP shaping the potential prices W' instead.
+        w_price = 0.0 if shaping else self.W_PRIME_VALUE * (self.w_prime_balance - w_before)
 
         if crashed:
             limit = self._speed_limit_over(start_position, new_position)
@@ -307,7 +361,10 @@ class BikeSimEnv:
                 "brake_need": list(self._recent_brake_need),  # oldest -> newest, ~2 s before the crash
             })
             self.velocity = 0.0
-            return self._state(), -self.CRASH_PENALTY - self.TIME_PENALTY * self.DT, False, self._truncated()
+            reward = -self.CRASH_PENALTY - self.TIME_PENALTY * self.DT + w_price
+            if shaping:  # speed reset to 0: the potential also charges the time to get going again
+                reward += self.gamma * self._potential() - phi_before
+            return self._state(), reward, False, self._truncated()
 
         self.position, self.velocity = new_position, new_velocity
 
@@ -319,9 +376,18 @@ class BikeSimEnv:
         # in time (ends each step at or below the envelope) never pays it.
         overspeed = self.velocity - physics.envelope_speed_at(self.envelope, min(self.position, self.total_distance), self.LIMIT_SPACING_M)
         reward -= self.OVERSPEED_PENALTY * max(overspeed, 0.0)
+        reward += w_price
 
         terminated = self.position >= self.total_distance
         self.finished = terminated
+        if shaping:
+            reward += self.gamma * self._potential(terminal=terminated) - phi_before
+        elif terminated:
+            # W' left at the finish is worth nothing. With this, the W' terms sum to
+            # -W_PRIME_VALUE * W'_start over every finished ride (undiscounted), the same for all
+            # policies, so ride time alone still ranks them; without it, the agent would be paid
+            # for finishing with W' unspent.
+            reward -= self.W_PRIME_VALUE * self.w_prime_balance
         return self._state(), reward, terminated, (not terminated) and self._truncated()
 
     def _grip_left_factor(self, brake_force: float, slope: float) -> float:

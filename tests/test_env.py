@@ -71,6 +71,7 @@ def test_riding_the_envelope_never_crashes(rider, corner_route):
     # Brake with brake_need x 500 N (next 50 N step up), coast near 0, else pedal 1000 W: with
     # only the observation, this rides the corner route crash-free and never pays overspeed.
     env = BikeSimEnv(rider, corner_route, dt=0.5)
+    env.W_PRIME_VALUE = 0.0  # isolate the overspeed term in the reward
     s = env.reset()
     overspeed_paid = 0.0
     while not env.finished:
@@ -131,3 +132,42 @@ def test_binding_curve_prefers_the_one_too_fast_to_brake_for(rider, straight_rou
     dist, limit = env._binding_curve_ahead()
     assert (dist, limit) == (pytest.approx(15.0), 15.0)
 
+
+
+@pytest.mark.parametrize("power_action", [2, 5, 20])  # 100 W (refills), 250 W (= CP), 1000 W (drains)
+def test_w_prime_pricing_sums_to_the_same_constant_for_every_ride(rider, straight_route, power_action):
+    # Spending W' costs W_PRIME_VALUE per J now, refilling earns it, and W' left at the finish is
+    # forfeited, so over a finished ride the W' terms add up to -W_PRIME_VALUE * W'_start whatever
+    # the pacing: ride time alone still ranks policies.
+    env = BikeSimEnv(rider, straight_route(length_m=500.0), dt=0.5)
+    env.reset()
+    env.velocity = 8.0
+    w_terms = 0.0
+    while not env.finished and not env._truncated():
+        start = env.position
+        _, r, *_ = env.step(power_action)
+        w_terms += r - (env.PROGRESS_REWARD * (min(env.position, env.total_distance) - start) - env.TIME_PENALTY * env.DT)
+    assert env.crashes == 0
+    assert w_terms == pytest.approx(-env.W_PRIME_VALUE * env.W_PRIME)
+
+
+def test_dp_shaping_telescopes_to_minus_the_start_potential(rider, straight_route):
+    # r' = r + gamma Phi(s') - Phi(s) with Phi(finish) = 0: over a finished ride the discounted
+    # shaping terms sum to -Phi(s_0) = V(start) - min V(0), whatever the pacing, so the optimal policy is unchanged.
+    from backend.engine import optimizer
+    route = straight_route(length_m=300.0, grade_pct=3.0)
+    plain = BikeSimEnv(rider, route, dt=0.5)
+    plain.W_PRIME_VALUE = 0.0  # shaping replaces the flat W' price: compare against the env without it
+    V = optimizer.solve(rider, optimizer.Course(route, (0.0, 0.0), plain.AIR_DENSITY, envelope=plain.envelope))
+    shaped = BikeSimEnv(rider, route, dt=0.5, value_function=V, gamma=0.99)
+    plain.reset(); shaped.reset()
+    v_start = optimizer.value_at(V, 0.0, 0.0, shaped.W_PRIME, behind_best=True)
+    discounted, t = 0.0, 0
+    while not shaped.finished:
+        action = 20 if t % 3 else 2  # uneven pacing: 100 W, 1000 W, 1000 W, ...
+        _, r_plain, *_ = plain.step(action)
+        _, r_shaped, *_ = shaped.step(action)
+        discounted += 0.99 ** t * (r_shaped - r_plain)
+        t += 1
+    assert plain.finished and shaped.crashes == 0
+    assert discounted == pytest.approx(v_start, rel=1e-6)

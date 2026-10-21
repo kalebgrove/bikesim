@@ -12,6 +12,7 @@ import numpy as np
 
 from env import BikeSimEnv
 from agent1 import Agent
+from backend.engine import optimizer
 from backend.engine.rider import Rider
 from backend.engine.route import Route
 
@@ -83,6 +84,8 @@ def main():
     parser.add_argument("--log-every", type=int, default=50, help="Log progress every N episodes.")
     parser.add_argument("--save-every", type=int, default=100, help="Save checkpoint (and run a greedy ride for best.pt) every N episodes.")
     parser.add_argument("--max-steps", type=int, default=40_000, help="Max steps per episode.")
+    parser.add_argument("--shaping", choices=["dp", "wprice"], default="dp",
+                        help="dp: shape rewards with the DP time-to-go (prices W' by place); wprice: flat 2 s/kJ W' price.")
     args = parser.parse_args()
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
@@ -92,7 +95,16 @@ def main():
     print(f"Route length: {env.total_distance / 1000:.2f} km | Corner-limited: {limited_m:.0f} m")
     print(f"State dim: {env.n_state} | Action count: {env.n_actions}")
 
+    # DP under the env's own braking rules (its envelope): the target this agent can actually reach
+    t0 = time.time()
+    course = optimizer.Course(env.route, env.wind_velocity_vector, env.AIR_DENSITY, envelope=env.envelope)
+    V = optimizer.solve(env.rider, course, dt=env.DT)
+    target = optimizer.ride(env.rider, course, V, dt=env.DT).total_time
+    print(f"DP target under env braking rules: {target / 60:.2f} min (solved in {time.time() - t0:.0f} s) | shaping: {args.shaping}")
+
     agent = Agent(n_state=env.n_state, n_actions=env.n_actions)
+    if args.shaping == "dp":
+        env.value_function, env.gamma = V, agent.gamma  # shaping is policy-invariant only with the agent's own gamma
     if args.resume and os.path.exists(args.resume):
         agent.load(args.resume)
         print(f"Resumed from {args.resume} (steps_done={agent.steps_done})")
