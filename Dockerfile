@@ -10,7 +10,7 @@ WORKDIR /app
 COPY --from=frontend /app/frontend/dist ./frontend/dist
 COPY backend/ ./backend/
 COPY pyproject.toml uv.lock ./
-RUN pip install uv && uv sync --no-dev
+RUN pip install uv && uv sync --no-default-groups
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 EXPOSE 8000
